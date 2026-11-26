@@ -18,6 +18,7 @@
   - EDGE_VOICE       (ค่าเริ่มต้น: th-TH-NiwatNeural)
   - VOICE_RATE       (ค่าเริ่มต้น: -8%)
   - VOICE_PITCH      (ค่าเริ่มต้น: -2Hz)
+  - AUDIO_TAIL_PAD   (ค่าเริ่มต้น: 0.4 วินาที เว้นความเงียบท้ายแต่ละฉาก)
 """
 import asyncio
 import base64
@@ -50,6 +51,8 @@ EDGE_VOICE = os.getenv("EDGE_VOICE", os.getenv("VOICE", "th-TH-NiwatNeural"))
 RATE = os.getenv("VOICE_RATE", "-8%")
 PITCH = os.getenv("VOICE_PITCH", "-2Hz")
 
+TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.4"))  # วินาที: เว้นความเงียบท้ายเสียงแต่ละฉาก ให้จังหวะไม่รีบ
+
 MIN_TOTAL_WARN, MAX_TOTAL_WARN = 35.0, 95.0
 MIN_TOTAL_HARD, MAX_TOTAL_HARD = 15.0, 150.0
 
@@ -72,6 +75,20 @@ def probe_duration(path: pathlib.Path) -> float:
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"ffprobe อ่านความยาวไม่ได้: {path.name} ({r.stderr.strip()})")
     return float(r.stdout.strip())
+
+
+def pad_tail(path: pathlib.Path, seconds: float = None):
+    """เติมความเงียบท้ายไฟล์เสียง (ทำก่อนวัดความยาว จึงรวมอยู่ใน duration ที่ใช้เรนเดอร์)"""
+    seconds = TAIL_PAD if seconds is None else seconds
+    if seconds <= 0:
+        return
+    tmp = path.with_suffix(".pad.mp3")
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(path), "-af", f"apad=pad_dur={seconds}",
+         "-ar", "44100", "-ac", "1", "-b:a", "128k", str(tmp)],
+        check=True,
+    )
+    tmp.replace(path)
 
 
 def clear_audio_dir():
@@ -243,6 +260,7 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
                 print(f"  รุ่น {model} ใช้ไม่ได้: {e}")
         if last_err is not None:
             raise RuntimeError(f"ทุกรุ่น Gemini TTS ล้มเหลวที่ฉาก {s['id']}: {last_err}")
+        pad_tail(p)
         dur = round(probe_duration(p), 2)
         if dur <= 0.3:
             raise RuntimeError(f"ความยาวเสียงฉาก {s['id']} สั้นผิดปกติ ({dur} วิ)")
@@ -275,6 +293,7 @@ async def generate_all_edge(scenes: list[dict]) -> list[tuple[pathlib.Path, floa
         p = AUD / f"scene_{s['id']:02d}.mp3"
         print(f"[edge-tts:{EDGE_VOICE}] ฉาก {s['id']}/{len(scenes)}...")
         await edge_tts_scene(s["narration"], p)
+        pad_tail(p)
         dur = round(probe_duration(p), 2)
         if dur <= 0.3:
             raise RuntimeError(f"ความยาวเสียงฉาก {s['id']} สั้นผิดปกติ ({dur} วิ)")
