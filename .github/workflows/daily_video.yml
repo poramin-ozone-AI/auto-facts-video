@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # กดรันเองเพื่อทดสอบ
     inputs:
       test_images:
-        description: "โหมดทดสอบ: สร้างภาพแค่ 2 ฉากและข้ามการเรนเดอร์คลิปเต็ม (ไม่บันทึกหัวข้อ)"
+        description: "โหมดทดสอบ: เขียนบท + สร้างภาพแค่ 2 ฉาก ข้ามเสียงและการเรนเดอร์ (ไม่บันทึกหัวข้อ)"
         type: boolean
         default: true
 
@@ -29,11 +29,11 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       # --- ตัวแปรปรับแต่ง (แก้ค่าตรงนี้ได้เลย; ถ้าลบบรรทัดไหน จะใช้ค่าเริ่มต้นในโค้ด) ---
-      GEMINI_MODEL: "gemini-2.5-flash"
-      GEMINI_FALLBACK_MODELS: "gemini-3.6-flash,gemini-2.5-flash-lite"
+      GEMINI_MODEL: "gemini-3.8-flash"
+      GEMINI_FALLBACK_MODELS: "gemini-3.6-flash,gemini-3.5-flash-lite"
       GROQ_MODEL: "openai/gpt-oss-120b"
-      GEMINI_TTS_MODEL: "gemini-3.1-flash-tts-preview"
-      GEMINI_TTS_FALLBACK_MODELS: "gemini-2.5-flash-preview-tts"
+      GEMINI_TTS_MODEL: "gemini-3.8-flash-tts"
+      GEMINI_TTS_FALLBACK_MODELS: ""   # เว้นว่าง: รุ่น lite ไม่รองรับภาษาไทย ถ้า 3.8 ใช้ไม่ได้ให้ใช้ edge-tts
       GEMINI_VOICE: "Orus"
       GEMINI_TTS_DELAY: "31"
       EDGE_VOICE: "th-TH-NiwatNeural"
@@ -62,6 +62,7 @@ jobs:
         run: python scripts/1_generate_script.py
 
       - name: 2) Generate Voice
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.test_images != 'true' }}
         run: python scripts/2_generate_voice.py
 
       - name: 3) Generate Images
