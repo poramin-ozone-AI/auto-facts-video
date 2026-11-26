@@ -3,8 +3,8 @@
 ผู้ให้บริการ: Gemini (หลัก, ลองหลายรุ่นตามลำดับ) -> Groq (สำรอง) ทั้งคู่มี free tier
 Secrets: GEMINI_API_KEY (จำเป็น), GROQ_API_KEY (แนะนำเป็นตัวสำรอง)
 ตัวแปร env ที่ปรับได้:
-  - GEMINI_MODEL            (ค่าเริ่มต้น: gemini-2.5-flash)
-  - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-2.5-flash-lite  คั่นด้วยจุลภาค)
+  - GEMINI_MODEL            (ค่าเริ่มต้น: gemini-3.8-flash)
+  - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-3.5-flash-lite  คั่นด้วยจุลภาค)
   - GROQ_MODEL              (ค่าเริ่มต้น: openai/gpt-oss-120b)
 
 หมายเหตุ: สคริปต์นี้ไม่บันทึกหัวข้อลง topics_history.txt อีกต่อไป
@@ -22,10 +22,10 @@ OUT = pathlib.Path("output")
 OUT.mkdir(exist_ok=True)
 HISTORY = OUT / "topics_history.txt"
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GEMINI_FALLBACKS = [
     m.strip()
-    for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-2.5-flash-lite").split(",")
+    for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash-lite").split(",")
     if m.strip()
 ]
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -45,7 +45,7 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - บทพากย์รวมกัน {min_c}-{max_c} ตัวอักษร แบ่งเป็น {min_s}-{max_s} ฉาก
 - แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียว ชัดเจน เป็นภาพแนวตั้ง (9:16) วางจุดเด่นไว้กลางภาพ
 - แต่ละฉากต้องบรรยายให้ครบในตัวเอง ไม่อ้างถึงภาพก่อนหน้า ไม่ต้องคงตัวละครเดิมต่อเนื่อง จะเป็นสัตว์ สิ่งของ ธรรมชาติ หรือคนก็ได้ตามเนื้อหา (ภาพทั้งหมดจะถูกวาดเป็นการ์ตูนสีน้ำน่ารัก)
-- ห้ามมีตัวหนังสือ ตัวเลข หรือข้อความใดๆ ในภาพ (ใส่ได้เฉพาะเครื่องหมาย ? หรือ ! ในบอลลูนเล็กๆ เป็นบางฉาก)
+- ห้ามมีตัวหนังสือ ตัวเลข เครื่องหมายคำพูด บอลลูนคำพูด หรือข้อความใดๆ ในภาพ
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป",

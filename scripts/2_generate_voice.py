@@ -8,9 +8,11 @@
    เพื่อป้องกันเสียงคนละคนปนกันในคลิปเดียว
 
 ตัวแปร env ที่ปรับได้:
-  - GEMINI_TTS_MODEL (ค่าเริ่มต้น: gemini-3.1-flash-tts-preview)
-  - GEMINI_TTS_FALLBACK_MODELS (ค่าเริ่มต้น: gemini-2.5-flash-preview-tts) ใช้เมื่อรุ่นหลักใช้ไม่ได้/โควตาเต็มตั้งแต่ฉากแรก
+  - GEMINI_TTS_MODEL (ค่าเริ่มต้น: gemini-3.8-flash-tts รองรับภาษาไทย)
+  - GEMINI_TTS_FALLBACK_MODELS (ค่าเริ่มต้น: ว่าง) ใช้เมื่อรุ่นหลักใช้ไม่ได้/โควตาเต็มตั้งแต่ฉากแรก
     (เลือกรุ่นที่ใช้ได้จากฉากแรก แล้วใช้รุ่นเดียวกันทั้งคลิปเพื่อให้เสียงเหมือนกันตลอด)
+    หมายเหตุ: gemini-3.8-flash-lite-tts ไม่รองรับภาษาไทย จึงไม่ใส่เป็นรุ่นสำรอง ถ้า 3.8 ใช้ไม่ได้ระบบจะสลับไป edge-tts
+    รุ่นเก่า gemini-3.1-flash-tts-preview และ gemini-2.5-flash-preview-tts มีกำหนดปิด 17 พ.ย. 2026
   - GEMINI_VOICE     (ค่าเริ่มต้น: Orus; ตัวเลือกอื่น: Charon, Algenib, Schedar, Fenrir, Puck)
   - GEMINI_TTS_DELAY (ค่าเริ่มต้น: 31 วินาที)
   - EDGE_VOICE       (ค่าเริ่มต้น: th-TH-NiwatNeural)
@@ -33,10 +35,10 @@ OUT = pathlib.Path("output")
 AUD = OUT / "audio"
 AUD.mkdir(parents=True, exist_ok=True)
 
-GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
 GEMINI_TTS_FALLBACKS = [
     m.strip()
-    for m in os.getenv("GEMINI_TTS_FALLBACK_MODELS", "gemini-2.5-flash-preview-tts").split(",")
+    for m in os.getenv("GEMINI_TTS_FALLBACK_MODELS", "").split(",")
     if m.strip()
 ]
 GEMINI_TTS_MODELS = [GEMINI_TTS_MODEL] + [m for m in GEMINI_TTS_FALLBACKS if m != GEMINI_TTS_MODEL]
@@ -138,30 +140,45 @@ class ModelUnavailable(Exception):
     """รุ่นนี้ใช้ไม่ได้ (ไม่มีสิทธิ์/ไม่พบรุ่น) ลองซ้ำไม่ช่วย"""
 
 
+TTS_STYLE_EN = (
+    "A calm, warm, firm male documentary narrator. Unhurried pace, clear Thai pronunciation, trustworthy tone."
+)
+
+
+def build_tts_payload(model: str, narration: str) -> dict:
+    """รุ่น 3.8 ขึ้นไป: text = บทพากย์เป๊ะๆ (โมเดลอ่านทุกคำ) ส่วนน้ำเสียงใส่ใน speech_metadata.style
+    รุ่นเก่า (ชื่อมี 'preview'): ต้องใส่คำสั่งน้ำเสียงไว้หน้าบทเป็นข้อความ (รูปแบบเดิม)"""
+    text = narration.strip()
+    if "preview" in model:
+        styled = (
+            "อ่านออกเสียงภาษาไทยด้วยน้ำเสียงผู้ชายผู้บรรยายสารคดี ที่นุ่มนวล หนักแน่น น่าเชื่อถือ "
+            "จังหวะพอดี ไม่รีบ ชัดถ้อยชัดคำ โดยอ่านเฉพาะข้อความด้านล่างนี้เท่านั้น ห้ามพูดคำสั่งนี้:\n" + text
+        )
+        return {
+            "contents": [{"parts": [{"text": styled}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}}},
+            },
+        }
+    return {
+        "contents": [
+            {"role": "user", "parts": [{"text": text, "speech_metadata": {"style": TTS_STYLE_EN}}]}
+        ],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"voice": GEMINI_VOICE}},
+        },
+    }
+
+
 def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str):
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ไม่มี GEMINI_API_KEY")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    styled_text = (
-        "อ่านออกเสียงภาษาไทยด้วยน้ำเสียงผู้ชายผู้บรรยายสารคดี ที่นุ่มนวล หนักแน่น น่าเชื่อถือ "
-        "จังหวะพอดี ไม่รีบ ชัดถ้อยชัดคำ โดยอ่านเฉพาะข้อความด้านล่างนี้เท่านั้น ห้ามพูดคำสั่งนี้:\n"
-        f"{narration.strip()}"
-    )
-    payload = {
-        "contents": [{"parts": [{"text": styled_text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": GEMINI_VOICE,
-                    }
-                }
-            },
-        },
-    }
+    payload = build_tts_payload(model, narration)
 
     for attempt in range(1, 4):
         try:
@@ -172,7 +189,9 @@ def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str):
                 timeout=120,
             )
             print(f"  [gemini-tts:{model}:{GEMINI_VOICE}] รอบ {attempt} -> HTTP {r.status_code}")
-            if r.status_code in (403, 404):
+            if r.status_code >= 400 and r.status_code != 429:
+                print(f"  เนื้อหาตอบกลับ: {r.text[:300]}")
+            if r.status_code in (400, 403, 404):
                 raise ModelUnavailable(f"HTTP {r.status_code}: {r.text[:200]}")
             if r.status_code == 429:
                 wait_s = 35 * attempt

@@ -4,19 +4,17 @@
   1) Cloudflare Workers AI  FLUX.2 klein 4B  (หลัก, สั่ง 720x1280 ตรงๆ, ใช้ข้อความล้วนไม่ส่งภาพอ้างอิง)
   2) Cloudflare Workers AI  รุ่นสำรอง         (CF_IMAGE_FALLBACK_MODELS = FLUX.1 schnell)
   3) Pollinations (ไม่ต้องใช้คีย์, จำกัด ~1 คำขอ/15 วินาที, อาจมีลายน้ำ)  -> ปิดได้ด้วย ENABLE_POLLINATIONS=0
-ตัวที่ล้มเหลวด้วย 429/401/403/404 จะถูกข้ามไปตลอดการรันที่เหลือ
+ตัวที่ล้มเหลวด้วย 401/403/404 จะถูกข้ามไปตลอดการรันที่เหลือ ส่วน 429 จะรอแล้วลองซ้ำ 1 ครั้งก่อน ถ้ายัง 429 ค่อยข้าม
 
 หมายเหตุ: ถ้าบางฉากต้องใช้ตัวสำรอง สไตล์ภาพอาจต่างจากฉากอื่นเล็กน้อย (ดู log ฟิลด์ image_provider ใน script.json)
 
 โหมดทดสอบ: python scripts/3_generate_images.py --test   (สร้างแค่ 2 ฉาก คือฉากแรกกับฉากกลาง โดยไม่ทับ script.json)
 Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (ถ้าไม่มีจะข้าม Cloudflare ไปใช้ตัวสำรองเลย)
 ตัวแปร env ที่ปรับได้:
-  - CF_IMAGE_MODEL            (ค่าเริ่มต้น: @cf/black-forest-labs/flux-1-schnell)
-  - CF_IMAGE_FALLBACK_MODELS  (ค่าเริ่มต้น: @cf/bytedance/stable-diffusion-xl-lightning)
-  - CF_IMAGE_STEPS            (ค่าเริ่มต้น: 6; สูงสุด 8 ใช้กับ FLUX)
+  - CF_IMAGE_MODEL            (ค่าเริ่มต้น: @cf/black-forest-labs/flux-2-klein-4b)
+  - CF_IMAGE_FALLBACK_MODELS  (ค่าเริ่มต้น: @cf/black-forest-labs/flux-1-schnell)
+  - CF_IMAGE_STEPS            (ค่าเริ่มต้น: 6; สูงสุด 8 ใช้กับ FLUX.1 schnell เท่านั้น klein ไม่ใช้)
   - ENABLE_POLLINATIONS       (ค่าเริ่มต้น: 1)
-  - USE_STYLE_REF             (ค่าเริ่มต้น: 0; ตั้ง 1 เพื่อส่ง assets/style_ref.png เป็นภาพอ้างอิงสไตล์ให้ klein
-                               ข้อควรระวัง: ภาพอ้างอิงที่มีตัวละคร/วัตถุชัดเจนอาจรั่วเข้ามาในภาพใหม่ ควรใช้เฉพาะภาพพื้นกระดาษ/คราบสีน้ำ)
 """
 import base64
 import json
@@ -43,16 +41,18 @@ STEPS = min(8, max(1, int(os.getenv("CF_IMAGE_STEPS", "6"))))
 ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 ENABLE_POLLINATIONS = os.getenv("ENABLE_POLLINATIONS", "1") != "0"
-USE_STYLE_REF = os.getenv("USE_STYLE_REF", "0") == "1"
 W, H = 720, 1280  # คลิปแนวตั้ง 9:16
 POLLINATIONS_GAP = 16.0  # วินาที (ผู้ใช้ไม่ล็อกอินจำกัด ~1 คำขอ/15 วินาที)
 
 _last_pollinations = 0.0
-REFS: dict = {}
 
 
 class ProviderDown(Exception):
-    """ตัวนี้ใช้ไม่ได้ต่อไปในการรันนี้ (โควตาเต็ม/ไม่มีสิทธิ์/ไม่พบรุ่น)"""
+    """ตัวนี้ใช้ไม่ได้ต่อไปในการรันนี้ (ไม่มีสิทธิ์/ไม่พบรุ่น หรือ 429 ซ้ำหลังรอแล้ว)"""
+
+
+class RateLimited(Exception):
+    """ได้ 429: รอสักครู่แล้วลองซ้ำ 1 ครั้ง ถ้ายัง 429 ค่อยถือว่าตัวนี้ใช้ไม่ได้"""
 
 
 def probe_size(path: pathlib.Path) -> tuple[int, int]:
@@ -93,59 +93,22 @@ def gen_cloudflare(model: str, prompt: str) -> bytes:
     if r.status_code in (401, 403, 404):
         raise ProviderDown(f"HTTP {r.status_code}: {r.text[:200]}")
     if r.status_code == 429:
-        raise ProviderDown("โควตาเต็มหรือเซิร์ฟเวอร์เต็ม (429)")
+        raise RateLimited("โควตาเต็มหรือเซิร์ฟเวอร์เต็ม (429)")
     r.raise_for_status()
     return image_bytes_from_response(r)
 
 
-def prepare_refs() -> dict:
-    """ค่าเริ่มต้น: ไม่ใช้ภาพอ้างอิงเลย (กันชิ้นส่วนของภาพตัวอย่างรั่วเข้ามาในภาพใหม่)
-    ถ้าตั้ง USE_STYLE_REF=1 และมี assets/style_ref.png จะย่อให้เล็กกว่า 512x512 (ข้อกำหนดของ FLUX.2 klein) แล้วส่งไปเป็นภาพอ้างอิงสไตล์
-    """
-    refs = {}
-    if not USE_STYLE_REF:
-        return refs
-    src = pathlib.Path("assets/style_ref.png")
-    if not src.exists():
-        print(f"WARNING: USE_STYLE_REF=1 แต่ไม่พบ {src} -> ไม่ใช้ภาพอ้างอิง")
-        return refs
-    d = OUT / "refs"
-    d.mkdir(parents=True, exist_ok=True)
-    dst = d / "style.png"
-    r = subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-         "-vf", "scale=480:480:force_original_aspect_ratio=decrease", str(dst)],
-        capture_output=True, text=True,
-    )
-    if r.returncode == 0 and dst.exists():
-        w, h = probe_size(dst)
-        if w < 512 and h < 512:
-            refs["style"] = dst
-    else:
-        print(f"WARNING: เตรียมภาพอ้างอิงสไตล์ไม่สำเร็จ: {r.stderr.strip()[:200]}")
-    return refs
-
-
 def gen_cloudflare_klein(model: str, prompt: str) -> bytes:
-    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 720x1280 ไม่ต้องครอป) ต้องส่งแบบ multipart เสมอ"""
+    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 720x1280 ไม่ต้องครอป) ต้องส่งแบบ multipart เสมอ (ไม่ส่งภาพอ้างอิง)"""
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{model}"
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
     fields = {"prompt": (None, prompt), "width": (None, str(W)), "height": (None, str(H))}
-    opened = []
-    try:
-        for idx, key in enumerate(k for k in ("style",) if k in REFS):
-            f = open(REFS[key], "rb")
-            opened.append(f)
-            fields[f"input_image_{idx}"] = (REFS[key].name, f, "image/png")
-        r = requests.post(url, headers=headers, files=fields, timeout=180)
-    finally:
-        for f in opened:
-            f.close()
+    r = requests.post(url, headers=headers, files=fields, timeout=180)
     print(f"  [cloudflare:{model}] HTTP {r.status_code}")
     if r.status_code in (401, 403, 404):
         raise ProviderDown(f"HTTP {r.status_code}: {r.text[:200]}")
     if r.status_code == 429:
-        raise ProviderDown("โควตาเต็มหรือเซิร์ฟเวอร์เต็ม (429)")
+        raise RateLimited("โควตาเต็มหรือเซิร์ฟเวอร์เต็ม (429)")
     r.raise_for_status()
     return image_bytes_from_response(r)
 
@@ -163,7 +126,7 @@ def gen_pollinations(prompt: str) -> bytes:
     if r.status_code in (401, 403, 404):
         raise ProviderDown(f"HTTP {r.status_code}: {r.text[:200]}")
     if r.status_code == 429:
-        raise ProviderDown("ถูกจำกัดอัตรา (429)")
+        raise RateLimited("ถูกจำกัดอัตรา (429)")
     r.raise_for_status()
     return image_bytes_from_response(r)
 
@@ -185,11 +148,15 @@ def build_providers() -> list[tuple[str, callable]]:
     return providers
 
 
+RATE_LIMIT_WAIT = 30  # วินาที: รอก่อนลองซ้ำเมื่อเจอ 429
+
+
 def generate(prompt: str, raw_path: pathlib.Path, providers, dead: set) -> str:
     """ลองตามลำดับผู้ให้บริการ คืนชื่อผู้ให้บริการที่สำเร็จ"""
     for name, fn in providers:
         if name in dead:
             continue
+        rate_limited_once = False
         for attempt in range(1, 4):
             try:
                 data = fn(prompt)
@@ -197,6 +164,15 @@ def generate(prompt: str, raw_path: pathlib.Path, providers, dead: set) -> str:
                 if raw_path.stat().st_size > 5000:
                     return name
                 print(f"  [{name}] รอบ {attempt}: ไฟล์ภาพเล็กผิดปกติ ({raw_path.stat().st_size} bytes)")
+            except RateLimited as e:
+                if rate_limited_once:
+                    print(f"  [{name}] 429 ซ้ำหลังรอแล้ว -> ข้ามตัวนี้ตลอดการรัน ({e})")
+                    dead.add(name)
+                    break
+                rate_limited_once = True
+                print(f"  [{name}] เจอ 429 -> รอ {RATE_LIMIT_WAIT} วินาทีแล้วลองซ้ำ 1 ครั้ง")
+                time.sleep(RATE_LIMIT_WAIT)
+                continue
             except ProviderDown as e:
                 print(f"  [{name}] ใช้ไม่ได้ต่อไปในการรันนี้ -> {e}")
                 dead.add(name)
@@ -243,8 +219,6 @@ def main():
     if test:
         scenes = [scenes[0]] if len(scenes) < 2 else [scenes[0], scenes[len(scenes) // 2]]
 
-    REFS.update(prepare_refs())
-    print("ภาพอ้างอิงที่ใช้ได้:", sorted(REFS) or "ไม่มี (ใช้ข้อความล้วน)")
     providers = build_providers()
     dead: set = set()
     used = []
