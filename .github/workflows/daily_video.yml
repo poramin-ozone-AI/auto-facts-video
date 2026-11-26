@@ -39,6 +39,7 @@ jobs:
       EDGE_VOICE: "th-TH-NiwatNeural"
       VOICE_RATE: "-8%"
       VOICE_PITCH: "-2Hz"
+      AUDIO_TAIL_PAD: "0.4"   # เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที)
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
       CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
       CF_IMAGE_STEPS: "6"
@@ -57,6 +58,10 @@ jobs:
         run: |
           sudo apt-get update -y && sudo apt-get install -y ffmpeg
           pip install -r requirements.txt
+
+      - name: 0) Check model names (เตือนอย่างเดียว ไม่ทำให้ล้ม)
+        continue-on-error: true
+        run: python scripts/0_check_models.py
 
       - name: 1) Generate Script
         run: python scripts/1_generate_script.py
