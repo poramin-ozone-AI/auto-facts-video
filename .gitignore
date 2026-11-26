@@ -1,0 +1,6 @@
+# ไฟล์ชั่วคราวที่ระบบสร้างตอนรัน (ไม่ต้อง commit) ยกเว้นประวัติหัวข้อ
+output/*
+!output/.gitkeep
+!output/topics_history.txt
+__pycache__/
+*.pyc
