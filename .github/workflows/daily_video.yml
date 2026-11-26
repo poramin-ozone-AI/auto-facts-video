@@ -39,8 +39,8 @@ jobs:
       EDGE_VOICE: "th-TH-NiwatNeural"
       VOICE_RATE: "-8%"
       VOICE_PITCH: "-2Hz"
-      CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-1-schnell"
-      CF_IMAGE_FALLBACK_MODELS: "@cf/bytedance/stable-diffusion-xl-lightning"
+      CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
+      CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
       CF_IMAGE_STEPS: "6"
       ENABLE_POLLINATIONS: "1"
     steps:
