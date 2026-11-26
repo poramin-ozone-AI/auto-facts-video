@@ -1,10 +1,10 @@
-"""ขั้น 4: ตัดต่อภาพนิ่ง + ซูมเข้าช้าๆ + รวมเสียงทุกฉาก -> output/output.mp4 (1280x720, 30fps, H.264/AAC)
+"""ขั้น 4: ตัดต่อภาพนิ่ง + ซูมเข้าช้าๆ + รวมเสียงทุกฉาก -> output/output.mp4 (720x1280 แนวตั้ง 9:16, 30fps, H.264/AAC)
 
 รายละเอียดตามสเปกข้อ 6.4:
-- ขยายภาพต้นฉบับก่อนเข้า zoompan (2560x1440) เพื่อลดอาการสั่น/กระตุกของซับพิกเซล
+- ขยายภาพต้นฉบับก่อนเข้า zoompan (1440x2560) เพื่อลดอาการสั่น/กระตุกของซับพิกเซล
 - ซูมเข้าช้าๆ (1.00 -> 1.13) ตลอด duration จริงของแต่ละฉาก
-- สลับจุดโฟกัสการซูมระหว่างฉากไม่ให้ซ้ำซาก (ถ้าเป็นฉาก stickman โฟกัสช่วงกลาง-บนใกล้ตัวละคร)
-- ตรวจสอบ output.mp4 ด้วย ffprobe: ต้องมีทั้งภาพและเสียง ขนาด 1280x720 และความยาวคลาดเคลื่อน <= 0.5 วินาที
+- สลับจุดโฟกัสการซูมระหว่างฉากเล็กน้อยไม่ให้ซ้ำซาก (จุดเด่นของภาพอยู่กลางภาพ)
+- ตรวจสอบ output.mp4 ด้วย ffprobe: ต้องมีทั้งภาพและเสียง ขนาด 720x1280 และความยาวคลาดเคลื่อน <= 0.5 วินาที
 """
 import json
 import pathlib
@@ -18,18 +18,14 @@ FINAL_MP4 = OUT / "output.mp4"
 
 FPS = 30
 
-STICKMAN_FOCUSES = [
-    ("iw/2-(iw/zoom/2)", "ih*0.42-(ih/zoom/2)"),
-    ("iw*0.45-(iw/zoom/2)", "ih*0.45-(ih/zoom/2)"),
-    ("iw*0.55-(iw/zoom/2)", "ih*0.45-(ih/zoom/2)"),
-    ("iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),
-]
+W, H = 720, 1280
 
-OBJECT_FOCUSES = [
+FOCUSES = [
     ("iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),
     ("iw*0.46-(iw/zoom/2)", "ih*0.46-(ih/zoom/2)"),
-    ("iw*0.54-(iw/zoom/2)", "ih*0.54-(ih/zoom/2)"),
     ("iw*0.54-(iw/zoom/2)", "ih*0.46-(ih/zoom/2)"),
+    ("iw*0.46-(iw/zoom/2)", "ih*0.54-(ih/zoom/2)"),
+    ("iw*0.54-(iw/zoom/2)", "ih*0.54-(ih/zoom/2)"),
 ]
 
 
@@ -64,13 +60,12 @@ def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path):
     dur = float(scene["duration"])
     frames = max(1, int(round(dur * FPS)))
 
-    focus_pool = STICKMAN_FOCUSES if scene.get("type") == "stickman" else OBJECT_FOCUSES
-    fx, fy = focus_pool[idx % len(focus_pool)]
+    fx, fy = FOCUSES[idx % len(FOCUSES)]
 
     zoom_expr = f"min(1.0+0.13*(on/{frames}),1.13)"
     vf = (
-        "scale=2560:1440:flags=lanczos,"
-        f"zoompan=z='{zoom_expr}':x='{fx}':y='{fy}':d={frames}:s=1280x720:fps={FPS},"
+        f"scale={W*2}:{H*2}:flags=lanczos,"
+        f"zoompan=z='{zoom_expr}':x='{fx}':y='{fy}':d={frames}:s={W}x{H}:fps={FPS},"
         "format=yuv420p"
     )
 
@@ -178,8 +173,8 @@ def main():
         sys.exit(f"ไฟล์วิดีโอขาดสตรีมภาพหรือเสียง (video={len(v_streams)}, audio={len(a_streams)})")
 
     vw, vh = int(v_streams[0]["width"]), int(v_streams[0]["height"])
-    if (vw, vh) != (1280, 720):
-        sys.exit(f"ขนาดวิดีโอสุดท้ายผิด: {vw}x{vh} (ต้องเป็น 1280x720)")
+    if (vw, vh) != (W, H):
+        sys.exit(f"ขนาดวิดีโอสุดท้ายผิด: {vw}x{vh} (ต้องเป็น {W}x{H})")
 
     actual_dur = float(info["format"]["duration"])
     expected_dur = float(data["total_duration"])
@@ -188,7 +183,7 @@ def main():
         sys.exit(f"ความยาววิดีโอเพี้ยน: ได้ {actual_dur:.2f} วิ แต่คาดหวัง {expected_dur:.2f} วิ (ต่าง {diff:.2f} วิ)")
 
     size_mb = FINAL_MP4.stat().st_size / (1024 * 1024)
-    print(f"OK! สร้าง output/output.mp4 สำเร็จ ({actual_dur:.2f} วิ | 1280x720 | {size_mb:.2f} MB)")
+    print(f"OK! สร้าง output/output.mp4 สำเร็จ ({actual_dur:.2f} วิ | {W}x{H} | {size_mb:.2f} MB)")
 
 
 if __name__ == "__main__":

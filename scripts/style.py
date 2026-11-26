@@ -1,36 +1,24 @@
 """ข้อความสไตล์คงที่ที่ขั้น 3 (สร้างภาพ) จะนำไปต่อหน้า image_prompt ของทุกฉาก
-ถอดจาก assets/stickman_ref.png และ assets/style_bg_ref.png
+
+สไตล์: สีน้ำ + เส้นหมึกดำบาง บนกระดาษครีมมีลาย (ถอดจากภาพตัวอย่างเป็น "ข้อความล้วน" ไม่ส่งภาพอ้างอิงให้โมเดล
+เพื่อกันไม่ให้ชิ้นส่วนของภาพตัวอย่างหลุดเข้ามาในภาพใหม่)
+ไม่มีการล็อกตัวละคร: แต่ละฉากเป็นภาพอิสระ จะเป็นสัตว์ สิ่งของ ธรรมชาติ หรือคนก็ได้
 """
 
 STYLE = (
-    "children's crayon and colored pencil drawing on textured off-white paper, "
-    "bold black hand-drawn outlines, bright saturated colors, visible crayon strokes, "
-    "full colorful background scene filling the entire frame, wide 16:9 landscape composition, "
-    "entire subject fully inside the frame with generous margins on all sides, nothing cut off, "
-    "no text, no letters, no watermark"
-)
-
-STICKMAN = (
-    "a stickman character with a large round white head, big black oval eyes, "
-    "a spiky mohawk of alternating bright green and white strokes, thin black stick body and limbs, "
-    "small black blob hands and black oval shoes, expressive face, centered framing"
+    "Children's book watercolor illustration with fine black ink outlines, "
+    "soft translucent watercolor washes with visible bleeding edges, on warm cream textured watercolor paper. "
+    "Cute expressive characters with big round shiny eyes, gentle muted colors with warm orange and soft blue accents, "
+    "subtle hand-drawn shading. Loose watercolor splashes fading out softly toward the edges of the paper. "
+    "Small decorative details such as tiny four-point sparkles, short motion lines, "
+    "and an optional small round speech bubble containing only a single \"?\" or \"!\" symbol. "
+    "Vertical 9:16 portrait composition, the main subject centered with generous margins, "
+    "entire subject fully inside the frame, nothing cut off. "
+    "No words, no letters, no numbers, no watermark. Not a photo, not 3D, not flat digital vector art."
 )
 
 
 def build_prompt(scene: dict) -> str:
-    """ประกอบ prompt ภาพตามชนิดของฉาก (stickman หรือ object)
-    แยกไว้เป็นจุดเดียวเพื่อให้ปรับสไตล์หรือสลับวิธีสร้างภาพในอนาคตได้ง่ายตามสเปกหัวข้อ 7
-    """
+    """ประกอบ prompt ภาพ: บล็อกสไตล์ + คำบรรยายฉาก (แยกไว้จุดเดียวเพื่อปรับสไตล์ในอนาคตได้ง่าย)"""
     scene_desc = scene["image_prompt"].strip().rstrip(".")
-    if scene["type"] == "stickman":
-        return (
-            f"{STYLE}. {STICKMAN}. Scene: {scene_desc}. "
-            "Match the character from image 1 and the crayon style from image 2. Full body visible from head to shoes. "
-            "The green and white mohawk is always fully visible, never covered by a hat or helmet. "
-            "All people in the scene are stickmen of the exact same style."
-        )
-    return (
-        f"{STYLE}. Scene: {scene_desc}. "
-        "Match the crayon style of image 1. No people, no human figures, no stickman; "
-        "the whole animal or object is visible and is the sole clear focus in the center."
-    )
+    return f"{STYLE} Scene: {scene_desc}."

@@ -1,20 +1,22 @@
-"""ขั้น 3: สร้างภาพทีละฉาก -> output/images/*.png (1280x720)
+"""ขั้น 3: สร้างภาพทีละฉาก -> output/images/*.png (720x1280 แนวตั้ง 9:16)
 
 ลำดับผู้ให้บริการ (สลับอัตโนมัติเมื่อตัวก่อนหน้าโควตาเต็ม/ล่ม):
-  1) Cloudflare Workers AI  FLUX.2 klein 4B  (หลัก, 1280x720 ตรงๆ + ภาพอ้างอิงตัวละคร/สไตล์)
+  1) Cloudflare Workers AI  FLUX.2 klein 4B  (หลัก, สั่ง 720x1280 ตรงๆ, ใช้ข้อความล้วนไม่ส่งภาพอ้างอิง)
   2) Cloudflare Workers AI  รุ่นสำรอง         (CF_IMAGE_FALLBACK_MODELS = FLUX.1 schnell)
   3) Pollinations (ไม่ต้องใช้คีย์, จำกัด ~1 คำขอ/15 วินาที, อาจมีลายน้ำ)  -> ปิดได้ด้วย ENABLE_POLLINATIONS=0
 ตัวที่ล้มเหลวด้วย 429/401/403/404 จะถูกข้ามไปตลอดการรันที่เหลือ
 
 หมายเหตุ: ถ้าบางฉากต้องใช้ตัวสำรอง สไตล์ภาพอาจต่างจากฉากอื่นเล็กน้อย (ดู log ฟิลด์ image_provider ใน script.json)
 
-โหมดทดสอบ: python scripts/3_generate_images.py --test   (สร้างแค่ 1 ฉาก stickman + 1 ฉาก object โดยไม่ทับ script.json)
+โหมดทดสอบ: python scripts/3_generate_images.py --test   (สร้างแค่ 2 ฉาก คือฉากแรกกับฉากกลาง โดยไม่ทับ script.json)
 Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (ถ้าไม่มีจะข้าม Cloudflare ไปใช้ตัวสำรองเลย)
 ตัวแปร env ที่ปรับได้:
   - CF_IMAGE_MODEL            (ค่าเริ่มต้น: @cf/black-forest-labs/flux-1-schnell)
   - CF_IMAGE_FALLBACK_MODELS  (ค่าเริ่มต้น: @cf/bytedance/stable-diffusion-xl-lightning)
   - CF_IMAGE_STEPS            (ค่าเริ่มต้น: 6; สูงสุด 8 ใช้กับ FLUX)
   - ENABLE_POLLINATIONS       (ค่าเริ่มต้น: 1)
+  - USE_STYLE_REF             (ค่าเริ่มต้น: 0; ตั้ง 1 เพื่อส่ง assets/style_ref.png เป็นภาพอ้างอิงสไตล์ให้ klein
+                               ข้อควรระวัง: ภาพอ้างอิงที่มีตัวละคร/วัตถุชัดเจนอาจรั่วเข้ามาในภาพใหม่ ควรใช้เฉพาะภาพพื้นกระดาษ/คราบสีน้ำ)
 """
 import base64
 import json
@@ -41,6 +43,8 @@ STEPS = min(8, max(1, int(os.getenv("CF_IMAGE_STEPS", "6"))))
 ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 ENABLE_POLLINATIONS = os.getenv("ENABLE_POLLINATIONS", "1") != "0"
+USE_STYLE_REF = os.getenv("USE_STYLE_REF", "0") == "1"
+W, H = 720, 1280  # คลิปแนวตั้ง 9:16
 POLLINATIONS_GAP = 16.0  # วินาที (ผู้ใช้ไม่ล็อกอินจำกัด ~1 คำขอ/15 วินาที)
 
 _last_pollinations = 0.0
@@ -78,13 +82,7 @@ def image_bytes_from_response(r: requests.Response) -> bytes:
     raise ValueError(f"ไม่พบภาพใน response: {str(payload)[:250]}")
 
 
-def no_ref_text(prompt: str) -> str:
-    """ตัดประโยคที่อ้างถึง 'image 1/2' ออก สำหรับโมเดลที่ไม่รับภาพอ้างอิง"""
-    return " ".join(x for x in prompt.split(". ") if "image 1" not in x and "image 2" not in x)
-
-
 def gen_cloudflare(model: str, prompt: str) -> bytes:
-    prompt = no_ref_text(prompt)
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{model}"
     headers = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"}
     body = {"prompt": prompt}
@@ -101,47 +99,44 @@ def gen_cloudflare(model: str, prompt: str) -> bytes:
 
 
 def prepare_refs() -> dict:
-    """ตัดท่ายืนตัวแรกจากชีตตัวละคร และย่อภาพสไตล์ให้เล็กกว่า 512x512 (ข้อกำหนดของ FLUX.2 klein)"""
+    """ค่าเริ่มต้น: ไม่ใช้ภาพอ้างอิงเลย (กันชิ้นส่วนของภาพตัวอย่างรั่วเข้ามาในภาพใหม่)
+    ถ้าตั้ง USE_STYLE_REF=1 และมี assets/style_ref.png จะย่อให้เล็กกว่า 512x512 (ข้อกำหนดของ FLUX.2 klein) แล้วส่งไปเป็นภาพอ้างอิงสไตล์
+    """
     refs = {}
+    if not USE_STYLE_REF:
+        return refs
+    src = pathlib.Path("assets/style_ref.png")
+    if not src.exists():
+        print(f"WARNING: USE_STYLE_REF=1 แต่ไม่พบ {src} -> ไม่ใช้ภาพอ้างอิง")
+        return refs
     d = OUT / "refs"
     d.mkdir(parents=True, exist_ok=True)
-    jobs = {
-        "stickman": ("assets/stickman_ref.png", "crop=240:450:10:15"),
-        "style": ("assets/style_bg_ref.png", "scale=480:-2"),
-    }
-    for key, (src, vf) in jobs.items():
-        if not pathlib.Path(src).exists():
-            print(f"WARNING: ไม่พบ {src} -> ข้ามภาพอ้างอิง {key}")
-            continue
-        dst = d / f"{key}.png"
-        r = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vf", vf, str(dst)],
-            capture_output=True, text=True,
-        )
-        if r.returncode == 0 and dst.exists():
-            w, h = probe_size(dst)
-            if w < 512 and h < 512:
-                refs[key] = dst
-        else:
-            print(f"WARNING: เตรียมภาพอ้างอิง {key} ไม่สำเร็จ: {r.stderr.strip()[:200]}")
+    dst = d / "style.png"
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+         "-vf", "scale=480:480:force_original_aspect_ratio=decrease", str(dst)],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0 and dst.exists():
+        w, h = probe_size(dst)
+        if w < 512 and h < 512:
+            refs["style"] = dst
+    else:
+        print(f"WARNING: เตรียมภาพอ้างอิงสไตล์ไม่สำเร็จ: {r.stderr.strip()[:200]}")
     return refs
 
 
-def gen_cloudflare_klein(model: str, prompt: str, scene_type: str) -> bytes:
-    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 16:9 ไม่ต้องครอป) และรับภาพอ้างอิงผ่าน multipart"""
+def gen_cloudflare_klein(model: str, prompt: str) -> bytes:
+    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 720x1280 ไม่ต้องครอป) ต้องส่งแบบ multipart เสมอ"""
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{model}"
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
-    fields = {"prompt": (None, prompt), "width": (None, "1280"), "height": (None, "720")}
+    fields = {"prompt": (None, prompt), "width": (None, str(W)), "height": (None, str(H))}
     opened = []
     try:
-        idx = 0
-        order = ["stickman", "style"] if scene_type == "stickman" else ["style"]
-        for key in order:
-            if key in REFS:
-                f = open(REFS[key], "rb")
-                opened.append(f)
-                fields[f"input_image_{idx}"] = (REFS[key].name, f, "image/png")
-                idx += 1
+        for idx, key in enumerate(k for k in ("style",) if k in REFS):
+            f = open(REFS[key], "rb")
+            opened.append(f)
+            fields[f"input_image_{idx}"] = (REFS[key].name, f, "image/png")
         r = requests.post(url, headers=headers, files=fields, timeout=180)
     finally:
         for f in opened:
@@ -156,13 +151,12 @@ def gen_cloudflare_klein(model: str, prompt: str, scene_type: str) -> bytes:
 
 
 def gen_pollinations(prompt: str) -> bytes:
-    prompt = no_ref_text(prompt)
     global _last_pollinations
     wait = POLLINATIONS_GAP - (time.time() - _last_pollinations)
     if wait > 0:
         time.sleep(wait)
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:1500])
-    params = {"width": 1344, "height": 768, "model": "flux", "nologo": "true"}
+    params = {"width": 768, "height": 1344, "model": "flux", "nologo": "true"}
     r = requests.get(url, params=params, timeout=180)
     _last_pollinations = time.time()
     print(f"  [pollinations] HTTP {r.status_code}")
@@ -179,26 +173,26 @@ def build_providers() -> list[tuple[str, callable]]:
     if ACCOUNT_ID and API_TOKEN:
         for m in [CF_MODEL] + [x for x in CF_FALLBACKS if x != CF_MODEL]:
             if "flux-2" in m:
-                providers.append((f"cloudflare:{m}", lambda p, t, m=m: gen_cloudflare_klein(m, p, t)))
+                providers.append((f"cloudflare:{m}", lambda p, m=m: gen_cloudflare_klein(m, p)))
             else:
-                providers.append((f"cloudflare:{m}", lambda p, t, m=m: gen_cloudflare(m, p)))
+                providers.append((f"cloudflare:{m}", lambda p, m=m: gen_cloudflare(m, p)))
     else:
         print("WARNING: ไม่มี CLOUDFLARE_* ใน Secrets -> ข้าม Cloudflare")
     if ENABLE_POLLINATIONS:
-        providers.append(("pollinations", lambda p, t: gen_pollinations(p)))
+        providers.append(("pollinations", lambda p: gen_pollinations(p)))
     if not providers:
         sys.exit("ไม่มีผู้ให้บริการสร้างภาพที่ใช้งานได้ (ตรวจ Secrets CLOUDFLARE_* หรือเปิด ENABLE_POLLINATIONS)")
     return providers
 
 
-def generate(prompt: str, scene_type: str, raw_path: pathlib.Path, providers, dead: set) -> str:
+def generate(prompt: str, raw_path: pathlib.Path, providers, dead: set) -> str:
     """ลองตามลำดับผู้ให้บริการ คืนชื่อผู้ให้บริการที่สำเร็จ"""
     for name, fn in providers:
         if name in dead:
             continue
         for attempt in range(1, 4):
             try:
-                data = fn(prompt, scene_type)
+                data = fn(prompt)
                 raw_path.write_bytes(data)
                 if raw_path.stat().st_size > 5000:
                     return name
@@ -216,25 +210,25 @@ def generate(prompt: str, scene_type: str, raw_path: pathlib.Path, providers, de
     sys.exit(f"สร้างภาพไม่สำเร็จทุกผู้ให้บริการ: {raw_path.name}")
 
 
-def to_16x9(raw: pathlib.Path, final: pathlib.Path):
-    """ปรับเป็น 1280x720 โดย 'ไม่ตัดภาพ': ถ้าต้นฉบับไม่ใช่ 16:9 จะย่อให้พอดีความสูงแล้วเติมขอบข้างด้วยภาพเดียวกันที่เบลอ"""
+def to_9x16(raw: pathlib.Path, final: pathlib.Path):
+    """ปรับเป็น 720x1280 โดย 'ไม่ตัดภาพ': ถ้าต้นฉบับไม่ใช่ 9:16 จะย่อให้พอดีความกว้างแล้วเติมขอบบน/ล่างด้วยภาพเดียวกันที่เบลอ"""
     w, h = probe_size(raw)
     print(f"  ขนาดที่ได้จากโมเดล: {w}x{h}")
-    if abs(w / h - 16 / 9) < 0.02:
-        vf = "scale=1280:720:flags=lanczos"
+    if abs(w / h - W / H) < 0.02:
+        vf = f"scale={W}:{H}:flags=lanczos"
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw), "-vf", vf, str(final)]
     else:
         fc = (
             "[0:v]split[a][b];"
-            "[a]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,boxblur=30:5[bg];"
-            "[b]scale=1280:720:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
+            f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=30:5[bg];"
+            f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2"
         )
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw), "-filter_complex", fc, str(final)]
     subprocess.run(cmd, check=True)
     if not final.exists() or final.stat().st_size <= 5000:
         sys.exit(f"ไฟล์ภาพสุดท้ายเล็กผิดปกติ: {final}")
-    if probe_size(final) != (1280, 720):
+    if probe_size(final) != (W, H):
         sys.exit(f"ขนาดภาพสุดท้ายผิด: {final}")
 
 
@@ -247,25 +241,20 @@ def main():
     data = json.loads(script_path.read_text(encoding="utf-8"))
     scenes = data["scenes"]
     if test:
-        pick, seen = [], set()
-        for s in scenes:
-            if s["type"] not in seen:
-                pick.append(s)
-                seen.add(s["type"])
-        scenes = pick
+        scenes = [scenes[0]] if len(scenes) < 2 else [scenes[0], scenes[len(scenes) // 2]]
 
     REFS.update(prepare_refs())
-    print("ภาพอ้างอิงที่ใช้ได้:", sorted(REFS))
+    print("ภาพอ้างอิงที่ใช้ได้:", sorted(REFS) or "ไม่มี (ใช้ข้อความล้วน)")
     providers = build_providers()
     dead: set = set()
     used = []
 
     for s in scenes:
-        print(f"ฉาก {s['id']} ({s['type']})")
+        print(f"ฉาก {s['id']}")
         raw = IMG / f"raw_{s['id']:02d}.png"
         final = IMG / f"scene_{s['id']:02d}.png"
-        name = generate(build_prompt(s), s["type"], raw, providers, dead)
-        to_16x9(raw, final)
+        name = generate(build_prompt(s), raw, providers, dead)
+        to_9x16(raw, final)
         s["image"] = str(final)
         s["image_provider"] = name
         used.append(name)
