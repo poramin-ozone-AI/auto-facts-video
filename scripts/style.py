@@ -4,8 +4,10 @@
 
 STYLE = (
     "children's crayon and colored pencil drawing on textured off-white paper, "
-    "bold black hand-drawn outlines, bright saturated colors, simple flat composition, "
-    "16:9 landscape, no text, no letters, no watermark"
+    "bold black hand-drawn outlines, bright saturated colors, visible crayon strokes, "
+    "full colorful background scene filling the entire frame, wide 16:9 landscape composition, "
+    "entire subject fully inside the frame with generous margins on all sides, nothing cut off, "
+    "no text, no letters, no watermark"
 )
 
 STICKMAN = (
@@ -23,9 +25,12 @@ def build_prompt(scene: dict) -> str:
     if scene["type"] == "stickman":
         return (
             f"{STYLE}. {STICKMAN}. Scene: {scene_desc}. "
-            "All people in the scene are stickmen of the exact same style, centered with safe margins."
+            "Match the character from image 1 and the crayon style from image 2. Full body visible from head to shoes. "
+            "The green and white mohawk is always fully visible, never covered by a hat or helmet. "
+            "All people in the scene are stickmen of the exact same style."
         )
     return (
         f"{STYLE}. Scene: {scene_desc}. "
-        "No people, no human figures, no stickman; the animal or object is the sole clear focus in the center."
+        "Match the crayon style of image 1. No people, no human figures, no stickman; "
+        "the whole animal or object is visible and is the sole clear focus in the center."
     )
