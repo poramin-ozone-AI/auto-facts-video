@@ -3,12 +3,7 @@ name: daily-video
 on:
   schedule:
     - cron: "0 1 * * *"      # 01:00 UTC = 08:00 เวลาไทย (GitHub ใช้ UTC และอาจล่าช้า 5-30 นาที)
-  workflow_dispatch:          # กดรันเองเพื่อทดสอบ
-    inputs:
-      test_images:
-        description: "โหมดทดสอบ: เขียนบท + สร้างภาพแค่ 2 ฉาก ข้ามเสียงและการเรนเดอร์ (ไม่บันทึกหัวข้อ)"
-        type: boolean
-        default: true
+  workflow_dispatch:          # กดรันเอง (รันเต็มทุกขั้นเหมือนรอบอัตโนมัติ)
 
 permissions:
   contents: write
@@ -67,23 +62,16 @@ jobs:
         run: python scripts/1_generate_script.py
 
       - name: 2) Generate Voice
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.test_images != 'true' }}
         run: python scripts/2_generate_voice.py
 
       - name: 3) Generate Images
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.test_images }}" = "true" ]; then
-            python scripts/3_generate_images.py --test
-          else
-            python scripts/3_generate_images.py
-          fi
+        run: python scripts/3_generate_images.py
 
       - name: 4) Render Video
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.test_images != 'true' }}
         run: python scripts/4_render_video.py
 
       - name: Upload final video & script artifact
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_images != 'true') }}
+        if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
           name: daily-video-${{ github.run_number }}
@@ -94,7 +82,7 @@ jobs:
 
       # บันทึกหัวข้อเฉพาะเมื่อคลิปเรนเดอร์สำเร็จและอัปโหลดแล้วเท่านั้น (รันล้มเหลว = หัวข้อไม่ถูกนับว่าใช้แล้ว)
       - name: 5) Save topic history to repository
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_images != 'true') }}
+        if: ${{ success() }}
         run: |
           python scripts/5_save_history.py
           git config user.name "github-actions[bot]"
@@ -106,11 +94,11 @@ jobs:
             git push
           fi
 
-      - name: Upload test or debug artifacts
-        if: ${{ failure() || (github.event_name == 'workflow_dispatch' && github.event.inputs.test_images == 'true') }}
+      - name: Upload debug artifacts
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
-          name: debug-or-test-${{ github.run_number }}
+          name: debug-${{ github.run_number }}
           path: |
             output/script.json
             output/audio/*.mp3
