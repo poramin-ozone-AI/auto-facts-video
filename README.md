@@ -101,3 +101,17 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 - ภาพตัดขวาง/ภาพขยายใกล้ (`cross-section` / `close-up macro`) จะไม่ถูกใส่มุมกล้องจาก `SHOTS` ซ้ำ
 - เป็น text-only ไม่รับประกันความเหมือน 100% เพราะไม่ส่งภาพอ้างอิงให้โมเดล
 - ข้อจำกัดที่ทราบดูหัวข้อ 10 ใน `PROJECT_SPEC.md`
+
+
+---
+
+## 5. Voice Enhancement v3.7 (เสียงพากย์)
+
+- บุคลิกเสียง: สนุกแบบพอดี เป็นมิตร มีชีวิตชีวา แต่ยังน่าเชื่อถือ
+- อารมณ์แยกตามฉากผ่าน `voice_direction`: `curious`, `informative`, `excited`, `mysterious`, `emphatic`, `warm`
+- ความเร็วตั้งเป้ากระฉับกระเฉงขึ้นประมาณ 8–10% จากการอ่านสารคดีแบบเนิบช้า โดยเป็นคำสั่งใน style prompt ไม่ใช่การปรับ rate แบบตัวเลข
+- ยังคง Gemini TTS และเสียง `Orus` เป็นค่าเริ่มต้น บท `narration` ที่ส่งเข้า TTS ไม่ถูกเติมคำสั่งสไตล์
+- ไฟล์ `script.json` รุ่นเก่าที่ไม่มี `voice_direction` จะใช้ `informative` โดยอัตโนมัติ
+- Edge TTS fallback ยังสร้างใหม่ทั้งคลิปด้วยเสียงและ rate/pitch เดิม โดยยังไม่ใช้อารมณ์แยกฉาก
+
+ดูรายละเอียดการเปลี่ยนแปลง ข้อจำกัด และแผนทดสอบในหัวข้อ 10 ของ `PROJECT_SPEC.md`
