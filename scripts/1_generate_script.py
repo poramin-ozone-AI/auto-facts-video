@@ -224,9 +224,10 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
             errs.append(f"ฉาก {i}: image_prompt สั้นเกินไป")
         direction = str(s.get("voice_direction", "")).strip().lower()
         if direction not in VOICE_DIRECTIONS:
-            errs.append(f"ฉาก {i}: voice_direction ต้องเป็นหนึ่งใน {sorted(VOICE_DIRECTIONS)}")
-        else:
-            s["voice_direction"] = direction
+            # ไม่ปฏิเสธทั้งบท (กันเสียโควตา retry) -> เติม informative แล้วเตือนใน log
+            print(f"WARNING: ฉาก {i}: voice_direction '{direction}' ไม่ถูกต้องหรือหายไป -> ใช้ informative")
+            direction = "informative"
+        s["voice_direction"] = direction
         s["id"] = i
     errs.extend(check_identities(scenes))
     total = sum(len(str(s.get("narration", "")).strip()) for s in scenes if isinstance(s, dict))
