@@ -1,6 +1,6 @@
 # Auto Facts Video (ระบบสร้างคลิปความรู้แปลกๆ อัตโนมัติ ฟรี 100%)
 
-ระบบสร้างวิดีโอสั้นความรู้แปลกๆ ภาษาไทยความละเอียด **720×1280 (แนวตั้ง 9:16)** ความยาวประมาณ **40–90 วินาที** วันละ 1 คลิปอัตโนมัติบน **GitHub Actions** โดยใช้ API ฟรีทั้งหมด
+ระบบสร้างวิดีโอสั้นความรู้แปลกๆ ภาษาไทยความละเอียด **1080×1920 (แนวตั้ง 9:16)** ความยาวประมาณ **40–90 วินาที** วันละ 1 คลิปอัตโนมัติบน **GitHub Actions** โดยใช้ API ฟรีทั้งหมด
 
 ---
 
@@ -15,7 +15,7 @@ auto-facts-video/
 │   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง; หมุนหมวดหัวข้อตามวัน)
 │   ├── 2_generate_voice.py             # ขั้น 2: เสียงพากย์ (Gemini TTS 3.8 -> edge-tts สำรองทั้งคลิป)
 │   ├── 3_generate_images.py            # ขั้น 3: ภาพ 9:16 สไตล์สีน้ำ (Cloudflare FLUX.2 klein -> FLUX.1 schnell -> Pollinations)
-│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งเข้ากลางภาพช้าๆ (1.00→1.05) + เบิร์นซับ + รวมเสียงเป็น output.mp4 (--test = ตัวอย่าง 2 ฉาก)
+│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งเข้ากลางภาพช้าๆ ความเร็วคงที่ (1.00→1.05) + เบิร์นซับ + รวมเสียงเป็น output.mp4 (--test = ตัวอย่าง 2 ฉาก)
 │   ├── subtitles.py                    # (v3.9) ตัดท่อนซับไทย + คำสำคัญสีเหลือง -> .ass / .srt
 │   ├── 5_save_history.py               # ขั้น 5: บันทึกหัวข้อที่ใช้แล้ว (ทำหลังคลิปสำเร็จเท่านั้น)
 │   └── compare_flux_models.py          # ทดสอบแยก FLUX.2 klein 4B เทียบ 9B (ไม่กระทบงานผลิต)
@@ -56,14 +56,15 @@ auto-facts-video/
 | `GEMINI_VOICE` | `Orus` | เสียงพากย์ชาย (ตัวเลือกอื่น: `Charon`, `Algenib`, `Schedar`, `Fenrir`) |
 | `GEMINI_TTS_DELAY` | `31` | วินาทีที่เว้นระหว่างฉาก เพื่อไม่ให้เกินโควตาฟรี |
 | `EDGE_VOICE` / `VOICE_RATE` / `VOICE_PITCH` | `th-TH-NiwatNeural` / `+0%` / `-2Hz` | เสียงสำรอง edge-tts (v3.7 ปรับ rate จาก `-8%` เป็น `+0%` ให้ใกล้จังหวะ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง) |
-| `AUDIO_TAIL_PAD` | `0.4` | เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที) ให้จังหวะไม่รีบ |
+| `AUDIO_TAIL_PAD` | `0.2` | เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที) ให้จังหวะไม่รีบ |
 | `SCRIPT_MIN_CHARS` / `SCRIPT_MAX_CHARS` | `520` / `1250` | ความยาวบทพากย์รวม (ตัวอักษร) ถ้าคลิปสั้นกว่า 35 วินาทีบ่อย ให้ขยับค่าต่ำสุดขึ้น |
 | `VOICE_DIRECTIONS_ENABLED` | ทั้ง 6 แบบ | อารมณ์เสียงรายฉากที่เปิดใช้ (คั่นด้วยจุลภาค) ตัดแบบที่ฟังแล้วไม่ต่างออกได้ `informative` เปิดอยู่เสมอ |
 | `IMAGE_DETAIL_LEVEL` | `rich` | (v3.8) ความละเอียดภาพ: `rich` = มีคน/ท่าทาง/ฉากหน้า-กลาง-หลัง/ของประกอบ/แสง, `standard` = ปานกลาง ใช้ถ้าภาพแน่นเกินหรือโมเดลทำตามไม่ครบ |
+| `VOICE_PER_SCENE_EMOTION` | `0` | (v4.0) `0` = น้ำเสียงเดียวกันทุกฉาก, `1` = เปลี่ยนอารมณ์ตาม `voice_direction` แบบ v3.7 |
 | `SUBTITLES_ENABLED` / `SUBTITLE_KEYWORDS_ENABLED` | `1` / `1` | (v3.9) เปิด/ปิดซับเบิร์น / คำสำคัญสีเหลือง (ปิดอย่างหลังจะไม่ขอ keywords จาก AI) |
 | `SUBTITLE_FONT` / `SUBTITLE_FONT_SIZE` / `SUBTITLE_MAX_CHARS` | `Loma` / `54` / `22` | ฟอนต์ไทย (ติดตั้งจาก `fonts-thai-tlwg`) ขนาด และจำนวนตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว) |
 | `SUBTITLE_MARGIN_BOTTOM` / `SUBTITLE_HIGHLIGHT_COLOR` | `230` / `#FFD93B` | ระยะจากขอบล่าง (~18%) และสีคำสำคัญ |
-| `CF_IMAGE_MODEL` | `@cf/black-forest-labs/flux-2-klein-4b` | โมเดลภาพหลัก (สั่งขนาด 720×1280 ตรงๆ) |
+| `CF_IMAGE_MODEL` | `@cf/black-forest-labs/flux-2-klein-4b` | โมเดลภาพหลัก (สั่งขนาด 1080×1920 ตรงๆ) |
 | `CF_IMAGE_FALLBACK_MODELS` | `@cf/black-forest-labs/flux-1-schnell` | โมเดลภาพสำรองบน Cloudflare |
 | `CF_IMAGE_STEPS` | `6` | จำนวนขั้นวาดภาพของ FLUX.1 schnell (1–8) ไม่มีผลกับ klein |
 | `ENABLE_POLLINATIONS` | `1` | ตัวสำรองภาพสุดท้าย (ไม่ต้องใช้คีย์ แต่ช้าและอาจมีลายน้ำ) ตั้งเป็น `0` เพื่อปิด |
@@ -141,8 +142,22 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 
 - ซับเบิร์นลงวิดีโอ **บรรทัดเดียว** ตัวหนาขาว ขอบดำ ไม่มีกล่องพื้น อยู่เหนือขอบล่าง ~18% (เลี่ยงปุ่มแพลตฟอร์ม) **คำสำคัญเป็นสีเหลือง** 1–2 คำต่อฉาก (AI เลือกตอนเขียนบท ต้องตรงกับ narration ตรงตัว ไม่ตรงจะถูกตัดทิ้ง)
 - ได้ไฟล์ `subtitles.srt` แยก (ไม่มีสี) ใน artifact ไว้อัปโหลดแยกหรือแก้เอง
-- ตัดคำไทยด้วย `pythainlp` เวลาแบ่งตามสัดส่วนตัวอักษรในแต่ละฉาก (ไม่ใช่ timestamp รายคำ จึงอาจเลื่อนจากเสียงเล็กน้อย)
+- ตัดคำไทยด้วย `pythainlp`; v4.1 ใช้ faster-whisper tiny เพื่อจับเวลาแบบ word timestamps เมื่อมี (fallback เป็น segment timestamps) และ fallback เป็นการแบ่งเวลาตามสัดส่วนเมื่อ Whisper ใช้ไม่ได้
 - `test_mode` เรนเดอร์ตัวอย่าง 2 ฉากพร้อมซับเป็น `test_output.mp4` ใน artifact `debug-or-test-…`
 - ปิดซับได้ด้วย `SUBTITLES_ENABLED: "0"` ปิดแค่สีเหลืองด้วย `SUBTITLE_KEYWORDS_ENABLED: "0"`
 - ยังไม่ได้ทดสอบบน GitHub runner จริง (ฟอนต์/pythainlp/จังหวะซับ) ให้รัน `test_mode` ก่อน
 - รายละเอียดในหัวข้อ 13 ของ `PROJECT_SPEC.md`
+
+---
+
+## 8. v4.0 (สไตล์น่ารัก + ภาพเต็มขอบ + เสียงคงที่ + ซูมความเร็วคงที่)
+
+- **ภาพ:** สไตล์ kawaii chibi (หัวโต ตากลมดำ แก้มชมพู สีพาสเทล) และสั่งใน prompt ให้เต็มขอบ ไม่มีกรอบ/ขอบขาว (ไม่มีขั้น crop)
+- **เสียง:** ใช้น้ำเสียงเดียวกันทุกฉาก (ปิดอารมณ์รายฉาก) เปิดกลับได้ด้วย `VOICE_PER_SCENE_EMOTION: "1"`
+- **ซูม:** เส้นตรงความเร็วคงที่ 1.00→1.05 เข้ากลางภาพเป๊ะ ขยายภาพ 4 เท่าก่อนซูมเพื่อลดอาการสั่น
+- ยังไม่ได้ทดสอบกับ API จริง ให้รัน `test_mode` แล้วดู `test_output.mp4`
+- รายละเอียดในหัวข้อ 14 ของ `PROJECT_SPEC.md`
+
+
+### v4.1 offline revision
+Output is 1080×1920 (upscaled from 720×1280 generated images; image API request size and quota remain unchanged), with the existing linear 5% zoom preserved. faster-whisper tiny supplies word timestamps when available (otherwise segment timestamps) with a proportional fallback. Final audio is loudness-normalized to a trial target of -14 LUFS / -1 dBTP. Run `python scripts/6_quality_check.py output/output.mp4` after rendering. Review images and audio manually before publishing. This is an offline workspace revision; no live APIs, Actions, commits, or pushes were run.
