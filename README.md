@@ -13,7 +13,8 @@ auto-facts-video/
 │   └── .gitkeep
 ├── scripts/
 │   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ (ไม่ล็อกตัวละคร)
-│   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง)
+│   ├── 0_check_models.py               # ขั้น 0: เตือนถ้าชื่อโมเดล Gemini ที่ตั้งไว้ไม่อยู่ในรายการของ API (ไม่ทำให้ล้ม)
+│   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง; หมุนหมวดหัวข้อตามวัน)
 │   ├── 2_generate_voice.py             # ขั้น 2: เสียงพากย์ (Gemini TTS 3.8 -> edge-tts สำรองทั้งคลิป)
 │   ├── 3_generate_images.py            # ขั้น 3: ภาพ 9:16 สไตล์สีน้ำ (Cloudflare FLUX.2 klein -> FLUX.1 schnell -> Pollinations)
 │   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งช้าๆ + รวมเสียงเป็น output.mp4
@@ -54,6 +55,7 @@ auto-facts-video/
 | `GEMINI_VOICE` | `Orus` | เสียงพากย์ชาย (ตัวเลือกอื่น: `Charon`, `Algenib`, `Schedar`, `Fenrir`) |
 | `GEMINI_TTS_DELAY` | `31` | วินาทีที่เว้นระหว่างฉาก เพื่อไม่ให้เกินโควตาฟรี |
 | `EDGE_VOICE` / `VOICE_RATE` / `VOICE_PITCH` | `th-TH-NiwatNeural` / `-8%` / `-2Hz` | เสียงสำรอง edge-tts |
+| `AUDIO_TAIL_PAD` | `0.4` | เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที) ให้จังหวะไม่รีบ |
 | `CF_IMAGE_MODEL` | `@cf/black-forest-labs/flux-2-klein-4b` | โมเดลภาพหลัก (สั่งขนาด 720×1280 ตรงๆ) |
 | `CF_IMAGE_FALLBACK_MODELS` | `@cf/black-forest-labs/flux-1-schnell` | โมเดลภาพสำรองบน Cloudflare |
 | `CF_IMAGE_STEPS` | `6` | จำนวนขั้นวาดภาพของ FLUX.1 schnell (1–8) ไม่มีผลกับ klein |
@@ -80,3 +82,20 @@ auto-facts-video/
 | `WARNING: มีภาพจาก Pollinations` | ภาพบางฉากมาจากตัวสำรองสุดท้าย | เปิดดูภาพก่อนโพสต์ว่ามีลายน้ำ/สไตล์ต่างไหม |
 | `สร้างภาพไม่สำเร็จทุกผู้ให้บริการ` | ภาพล้มเหลวทุกตัว | ดู log ว่าแต่ละตัวล้มเพราะอะไร แล้วรันใหม่ |
 | `Permission denied to github-actions[bot]` ตอน push | ยังไม่ได้เปิดสิทธิ์เขียนให้ Actions | **Settings → Actions → General** เลือก **Read and write permissions** |
+
+
+## ทดสอบโมเดลภาพ 4B เทียบ 9B (ไม่กระทบงานผลิต)
+ตั้งค่า `CLOUDFLARE_API_TOKEN` และ `CLOUDFLARE_ACCOUNT_ID` แล้วรัน:
+```bash
+python scripts/compare_flux_models.py --prompt "A watercolor illustration of ..."
+```
+ผลจะอยู่ใน `output/model_compare/` เท่านั้น ไม่แก้ `output/script.json` และไม่เปลี่ยนโมเดลที่ workflow ใช้
+**ข้อควรระวัง:** FLUX.2 klein 9B ใช้ Neurons สูงกว่า 4B มาก ควรตรวจยอด/โควตาก่อนรันทดสอบ
+
+
+## v3.2 ปรับปรุง: Visual Consistency
+- เพิ่มคำสั่งให้วางแผนตัวละคร/สัตว์/วัตถุที่ปรากฏซ้ำจากบททั้งหมดก่อนเขียน prompt
+- เพิ่ม `IDENTITY LOCK:` ใน image_prompt โดยคง schema ของ script.json เดิม และคัดลอก descriptor เดิมทุกฉากที่มีตัวเดิม
+- อนุญาตให้เปลี่ยนท่าทาง/กิจกรรม/มุมกล้อง/ฉาก แต่ห้ามเปลี่ยนชนิด สี ลวดลาย สัดส่วน และจุดเด่น
+- ความหลากหลายยังคงแยกจาก identity: ฉากที่ไม่พูดถึงตัวเดิมใช้สิ่งอื่นได้เต็มที่
+- เป็น text-only consistency; ไม่รับประกันความเหมือน 100% เพราะยังไม่ส่งภาพอ้างอิงให้โมเดล
