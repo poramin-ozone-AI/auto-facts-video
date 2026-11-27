@@ -9,8 +9,6 @@
 ```text
 auto-facts-video/
 ├── .github/workflows/daily_video.yml   # Workflow ตั้งเวลา 08:00 น. (เวลาไทย) + กดรันทดสอบได้
-├── assets/
-│   └── .gitkeep
 ├── scripts/
 │   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ + มุมกล้อง + ตัวดึง IDENTITY LOCK (prompt ภาพ = ฉาก -> identity -> มุมกล้อง -> สไตล์ ไม่ส่งบทพากย์เข้าโมเดลภาพ)
 │   ├── 0_check_models.py               # ขั้น 0: เตือนถ้าชื่อโมเดล Gemini ที่ตั้งไว้ไม่อยู่ในรายการของ API (ไม่ทำให้ล้ม)
@@ -67,8 +65,8 @@ auto-facts-video/
 
 ## 3. วิธีทดสอบและใช้งาน
 
-1. แท็บ **Actions** → **daily-video** → **Run workflow** (คง `test_images` ติ๊กไว้) แล้วดาวน์โหลด Artifact `debug-or-test-…` มาดูภาพตัวอย่าง 2 ฉาก (โหมดนี้เขียนบทกับสร้างภาพเท่านั้น ข้ามเสียงและการเรนเดอร์ และไม่บันทึกหัวข้อ)
-2. พอใจแล้ว รันอีกครั้งโดยเอาเครื่องหมายถูก `test_images` ออก จะได้ Artifact `daily-video-…` (`output.mp4`) หลังจากนั้นระบบรันเองทุกวัน 08:00 น.
+1. แท็บ **Actions** → **daily-video** → **Run workflow** จะรันเต็มทุกขั้นเหมือนรอบอัตโนมัติ เมื่อสำเร็จจะได้ Artifact `daily-video-…` (`output.mp4` และ `script.json`) และบันทึกหัวข้อลง `output/topics_history.txt`
+2. หลังจากนั้นระบบรันเองทุกวัน 08:00 น. (เวลาไทย) หากรันล้มเหลวจะได้ Artifact `debug-…` สำหรับตรวจ log และไฟล์ที่สร้างไว้ และหัวข้อจะไม่ถูกนับว่าใช้แล้ว
 
 หัวข้อจะถูกบันทึกลง `output/topics_history.txt` **เฉพาะเมื่อคลิปสำเร็จ** รันที่ล้มเหลวจึงไม่เสียหัวข้อ
 
@@ -114,4 +112,4 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 - ไฟล์ `script.json` รุ่นเก่าที่ไม่มี `voice_direction` จะใช้ `informative` โดยอัตโนมัติ
 - Edge TTS fallback ยังสร้างใหม่ทั้งคลิปด้วยเสียงและ rate/pitch เดิม โดยยังไม่ใช้อารมณ์แยกฉาก
 
-ดูรายละเอียดการเปลี่ยนแปลง ข้อจำกัด และแผนทดสอบในหัวข้อ 10 ของ `PROJECT_SPEC.md`
+ดูรายละเอียดการเปลี่ยนแปลง ข้อจำกัด และแผนทดสอบในหัวข้อ 11 ของ `PROJECT_SPEC.md`
