@@ -33,8 +33,9 @@ GEMINI_FALLBACKS = [
 ]
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-# เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที -> 40-90 วิ ~ 520-1350 ตัวอักษร (ค่าจริงวัดในขั้น 2)
-MIN_CHARS, MAX_CHARS = 450, 1400
+# เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที -> 40-90 วิ ~ 520-1250 ตัวอักษร (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
+# (v3.5 เป็น 450-1400 ซึ่งหลุดช่วง 40-90 วินาทีได้ทั้งสองด้าน)
+MIN_CHARS, MAX_CHARS = 520, 1250
 MIN_SCENES, MAX_SCENES = 6, 12
 
 # หมวดหัวข้อประจำวัน (หมุนตามเลขวันของปี UTC) กันหัวข้อกลุ่มเดียวกันออกติดกันหลายวัน
@@ -223,6 +224,18 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
     return errs
 
 
+def with_feedback(prompt: str, errs: list[str]) -> str:
+    """ถ้ารอบก่อนไม่ผ่าน ให้ต่อท้าย prompt ด้วยรายการข้อผิดพลาด เพื่อให้โมเดลแก้ตรงจุด (ไม่ใช่ส่งซ้ำเฉยๆ)"""
+    if not errs:
+        return prompt
+    lines = "\n".join(f"- {e}" for e in errs[:8])
+    return (
+        prompt
+        + "\n\nคำตอบรอบก่อนไม่ผ่านการตรวจด้วยเหตุผลต่อไปนี้ แก้ให้ครบทุกข้อ แล้วตอบเป็น JSON ฉบับสมบูรณ์ใหม่ทั้งหมด:\n"
+        + lines
+    )
+
+
 def main():
     all_history = HISTORY.read_text(encoding="utf-8").strip().splitlines() if HISTORY.exists() else []
     history = all_history[-60:]
@@ -247,10 +260,15 @@ def main():
         sys.exit("ไม่พบ GEMINI_API_KEY หรือ GROQ_API_KEY ใน Secrets")
 
     for name, model, fn in providers:
+        last_errs: list[str] = []  # ข้อผิดพลาดรอบก่อน ส่งกลับให้โมเดลแก้ (v3.6) รีเซ็ตเมื่อเปลี่ยนโมเดล
         for attempt in range(1, 4):
             try:
-                raw = fn(prompt, model)
-                data = parse(raw)
+                raw = fn(with_feedback(prompt, last_errs), model)
+                try:
+                    data = parse(raw)
+                except json.JSONDecodeError as je:
+                    last_errs = [f"คำตอบไม่ใช่ JSON ที่ถูกต้อง ({je.msg}) ต้องตอบเป็น JSON อย่างเดียว"]
+                    raise
                 errs = validate(data, all_history)
                 if not errs:
                     data["provider"] = name
@@ -261,6 +279,7 @@ def main():
                     total = sum(len(s["narration"].strip()) for s in data["scenes"])
                     print(f"OK ({name}:{model}) หัวข้อ: {data['topic']} | {len(data['scenes'])} ฉาก | {total} ตัวอักษร")
                     return
+                last_errs = errs
                 print(f"[{name}:{model}] รอบ {attempt}: บทไม่ผ่านการตรวจ -> {errs}")
             except NonRetryable as e:
                 print(f"[{name}:{model}] ใช้ไม่ได้ ข้ามไปตัวถัดไป -> {e}")

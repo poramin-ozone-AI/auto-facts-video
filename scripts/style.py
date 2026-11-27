@@ -12,9 +12,9 @@ STYLE = (
     "the subject. The cream paper grain may show subtly in the painted texture, but do not force "
     "a cream-colored background: paint a setting, atmosphere, and palette appropriate to the scene. "
     "Vary composition, camera distance, viewpoint, lighting, and environmental details according "
-    "to the subject. Make the narrated subject unmistakably clear and visually dominant without "
+    "to the subject. Make the main subject unmistakably clear and visually dominant without "
     "always placing it in the exact center. Use a clean visual hierarchy and avoid unnecessary clutter. "
-    "No text, letters, numbers, labels, speech bubbles, logos, or watermark. "
+    "Purely pictorial artwork: every wall, object surface, and paper margin stays clean, blank, and unmarked. "
     "Not photorealistic, not 3D, not flat vector art."
 )
 
@@ -64,16 +64,15 @@ def build_prompt(scene: dict) -> str:
     identity_instruction = ""
     if identities:
         identity_instruction = (
-            " CHARACTER / SUBJECT IDENTITY MUST MATCH EXACTLY: "
+            "CHARACTER / SUBJECT IDENTITY MUST MATCH EXACTLY: "
             + "; ".join(identities)
             + ". Preserve the same species, anatomy, proportions, base colors, "
               "markings, and distinctive features. Only pose, action, expression, "
               "camera angle, and environment may change as the scene requires."
         )
+    # v3.6: ไม่ส่งบทพากย์ (narration) เข้าโมเดลภาพ เพราะ T1 พบว่าโมเดลเอาบทมาเขียนเป็นตัวหนังสือในภาพ
+    # (ฉาก 4: ข้อความอังกฤษที่แปลจากบทไทยโผล่ใต้ภาพ) image_prompt บรรยายฉากครบในตัวอยู่แล้ว
+    # ลำดับ: ฉาก -> identity -> มุมกล้อง -> สไตล์ (FLUX ให้น้ำหนักข้อความช่วงต้น)
     # The explicit scene prompt wins; shot wording is intentionally non-binding.
-    return (
-        f"{STYLE} {shot} "
-        f"Show one clear primary idea that directly illustrates this narration: "
-        f"{str(scene.get('narration', '')).strip()} "
-        f"Scene description: {scene_desc}. {identity_instruction}"
-    ).replace("  ", " ")
+    parts = [f"{scene_desc}.", identity_instruction, shot, STYLE]
+    return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
