@@ -372,6 +372,12 @@ def main():
     if test:
         for s, (p, dur) in zip(scenes, results):
             print(f"  ทดสอบ: ฉาก {s['id']} ({scene_direction(s)}) -> {p} {dur} วิ")
+        # v3.9: บันทึกฉากทดสอบ (id/เสียง/ความยาว) ให้ขั้น 3 เลือกฉากเดียวกัน และขั้น 4 เรนเดอร์ตัวอย่างพร้อมซับได้
+        (OUT / "test_scenes.json").write_text(
+            json.dumps([{"id": s["id"], "audio": str(p), "duration": dur} for s, (p, dur) in zip(scenes, results)],
+                       ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         print(f"เสร็จขั้น 2 (โหมดทดสอบ, {provider_used}) | ไม่ได้เขียนทับ script.json")
         return
 

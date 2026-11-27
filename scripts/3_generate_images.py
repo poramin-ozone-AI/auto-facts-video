@@ -217,7 +217,21 @@ def main():
     data = json.loads(script_path.read_text(encoding="utf-8"))
     scenes = data["scenes"]
     if test:
-        scenes = [scenes[0]] if len(scenes) < 2 else [scenes[0], scenes[len(scenes) // 2]]
+        # v3.9: ใช้ฉากเดียวกับที่ขั้น 2 สร้างเสียงทดสอบไว้ (output/test_scenes.json) เพื่อให้ขั้น 4 เรนเดอร์ตัวอย่างได้
+        # ถ้าไม่มีไฟล์นั้น ใช้ตรรกะเดิม (ฉากแรก + ฉากกลาง)
+        chosen = []
+        ts = OUT / "test_scenes.json"
+        if ts.exists():
+            try:
+                ids = {int(x["id"]) for x in json.loads(ts.read_text(encoding="utf-8"))}
+                chosen = [s for s in scenes if int(s["id"]) in ids]
+            except Exception as e:
+                print(f"WARNING: อ่าน test_scenes.json ไม่ได้ ({e}) -> ใช้ฉากแรก+ฉากกลาง")
+        if chosen:
+            scenes = chosen
+        else:
+            scenes = [scenes[0]] if len(scenes) < 2 else [scenes[0], scenes[len(scenes) // 2]]
+        print(f"[โหมดทดสอบภาพ] ฉากที่ใช้: {[s['id'] for s in scenes]}")
 
     providers = build_providers()
     dead: set = set()

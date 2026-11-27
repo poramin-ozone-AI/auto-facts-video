@@ -7,6 +7,9 @@ Secrets: GEMINI_API_KEY (จำเป็น), GROQ_API_KEY (แนะนำเ�
   - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-3.5-flash-lite  คั่นด้วยจุลภาค)
   - GROQ_MODEL              (ค่าเริ่มต้น: openai/gpt-oss-120b)
   - SCRIPT_MIN_CHARS / SCRIPT_MAX_CHARS  (ค่าเริ่มต้น: 520 / 1250 ตัวอักษรของบทพากย์รวม)
+  - IMAGE_DETAIL_LEVEL      (ค่าเริ่มต้น: rich; ใช้ standard ถ้าภาพแน่นเกิน) กำหนดความละเอียดของ image_prompt และสไตล์ภาพ
+  - SUBTITLES_ENABLED / SUBTITLE_KEYWORDS_ENABLED  (ค่าเริ่มต้น 1/1; ปิดอย่างใดอย่างหนึ่ง = ไม่ขอ keywords สำหรับซับสีเหลืองจาก AI)
+  - GEMINI_MAX_OUTPUT_TOKENS / GROQ_MAX_TOKENS  (ค่าเริ่มต้น: 16384 / 6000) เพดานโทเคนคำตอบ กัน JSON ถูกตัด
   - VOICE_DIRECTIONS_ENABLED (ค่าเริ่มต้น: curious,informative,excited,mysterious,emphatic,warm
                               คั่นด้วยจุลภาค; ตัดบางอารมณ์ออกได้ informative จะอยู่เสมอ)
 
@@ -22,7 +25,8 @@ import sys
 import time
 import requests
 
-from style import extract_identities
+from style import IMAGE_DETAIL_LEVEL, extract_identities, strip_identity
+from subtitles import KEYWORDS_ENABLED
 
 OUT = pathlib.Path("output")
 OUT.mkdir(exist_ok=True)
@@ -41,6 +45,72 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 MIN_CHARS = int(os.getenv("SCRIPT_MIN_CHARS", "520"))
 MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "1250"))
 MIN_SCENES, MAX_SCENES = 6, 12
+# เพดานโทเคนคำตอบ (v3.8: image_prompt ยาวขึ้น) Gemini นับโทเคนที่ "คิด" รวมด้วย จึงตั้งสูงไว้ก่อน
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "16384"))
+# Groq ฟรีจำกัดโทเคน/นาทีต่ำ (~8K รวม prompt) จึงไม่ยกเพดานเกิน 6000 โดยอัตโนมัติ
+GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "6000"))
+
+# ความยาว image_prompt (คำ ไม่นับบรรทัด IDENTITY LOCK): (ที่สั่งใน prompt, ขอบที่ validator ยอมรับ)
+IMAGE_WORDS = {
+    "rich": {"ask": (60, 120), "accept": (45, 160)},
+    "standard": {"ask": (35, 70), "accept": (25, 110)},
+}
+IMG_ASK_MIN, IMG_ASK_MAX = IMAGE_WORDS[IMAGE_DETAIL_LEVEL]["ask"]
+IMG_MIN_WORDS, IMG_MAX_WORDS = IMAGE_WORDS[IMAGE_DETAIL_LEVEL]["accept"]
+
+
+KEYWORD_MAX_CHARS = 12
+KEYWORD_STOPWORDS = {"และ", "แต่", "ที่", "ซึ่ง", "เพราะ", "หรือ", "ก็", "จึง", "เมื่อ", "ใน", "ของ", "คือ", "เป็น", "มี", "จะ", "ได้", "ไม่"}
+
+
+def keyword_prompt_parts() -> tuple[str, str]:
+    """คืน (บรรทัดกฎ keywords, ฟิลด์ใน JSON ตัวอย่าง) ว่างทั้งคู่ถ้าปิดซับสีเหลือง"""
+    if not KEYWORDS_ENABLED:
+        return "", ""
+    rule = (
+        f"- ทุกฉากใส่ keywords เป็นลิสต์ 1-2 คำที่เป็นคำสำคัญของฉากนั้น (ชื่อเฉพาะ ตัวเลข สิ่งที่น่าทึ่ง) เพื่อทำสีเน้นในซับ "
+        f"ต้องคัดลอกจาก narration ของฉากนั้นตรงตัวทุกตัวอักษร ยาวไม่เกิน {KEYWORD_MAX_CHARS} ตัวอักษร "
+        "ห้ามใช้คำทั่วไปอย่าง และ แต่ ที่ เป็น มี ได้\n"
+    )
+    return rule, ' "keywords": ["คำสำคัญ"],'
+
+
+def image_rules() -> str:
+    """กฎการเขียน image_prompt ตามระดับ IMAGE_DETAIL_LEVEL (ใส่ลงใน PROMPT)"""
+    common_head = (
+        f"- image_prompt เขียนเป็นภาษาอังกฤษ ความยาว {IMG_ASK_MIN}-{IMG_ASK_MAX} คำ (ไม่นับบรรทัด IDENTITY LOCK) "
+        "เป็นประโยคบรรยายเชิงบวกว่า \"มีอะไรอยู่ในภาพ\" ห้ามใช้ negative prompt หรือคำปฏิเสธ เช่น no, without, not, avoid\n"
+        "- ประโยคแรกของ image_prompt ต้องบอก \"ใคร/อะไร ทำอะไร ที่ไหน\" ให้ชัดก่อน (โมเดลภาพให้น้ำหนักช่วงต้นข้อความ) "
+        "แล้วค่อยเพิ่มรายละเอียดตามลำดับ\n"
+        "- ถ้า narration พูดถึงการกระทำของคนหรือสัตว์ ต้องเห็นตัวนั้นทำสิ่งนั้นจริงในภาพด้วยท่าทางที่ชัดเจน "
+        "ห้ามวาดแค่ยานพาหนะ สิ่งของ หรือสถานที่เปล่าๆ (เช่น พูดถึงนักพายเรือ ต้องมีนักพายกำลังออกแรงดึงไม้พาย ไม่ใช่เรือเปล่า)\n"
+    )
+    if IMAGE_DETAIL_LEVEL == "rich":
+        body = (
+            "- แยกชั้นภาพให้ชัด: ฉากหน้า (foreground) ฉากกลาง (middle ground) และฉากหลัง (background)\n"
+            "- ใส่ของประกอบ 2-3 อย่างที่เกี่ยวกับข้อเท็จจริงของฉากนั้น เช่น โล่ทรงกลม เชือก ธงใบเรือ\n"
+            "- ระบุแสงและบรรยากาศ เช่น หมอกเทาเงินลอยเป็นชั้น แสงรำไรผ่านม่านหมอก\n"
+            "- ใส่ไอเดียเชิงสัญลักษณ์หรือจินตนาการ 1 อย่างต่อฉาก ที่ช่วยสื่อข้อเท็จจริงนั้น เช่น ผลึก sunstone ชูส่องฟ้า นกกาที่ปล่อยบินนำทาง\n"
+            "- แม้มีรายละเอียดมาก จุดโฟกัสหลักต้องยังชัดเจนเพียงจุดเดียว ไม่ให้ภาพรก\n"
+            "- ถ้าข้อเท็จจริงมีหลายองค์ประกอบ ให้แตกเป็นหลายฉากแทนการยัดทุกอย่างไว้ในภาพเดียว แต่ห้ามเกิน "
+            f"{MAX_SCENES} ฉาก\n"
+            "- ตัวอย่างโครงของ image_prompt (ใช้เป็นแนวทางเท่านั้น ห้ามคัดลอกเนื้อหาหรือธีมไวกิ้ง): \"Bearded Viking rowers in wool tunics haul on long oars aboard a longship "
+            "crossing a grey northern sea. In the foreground, a coil of rope and a round wooden shield rest on the deck; "
+            "in the middle ground the striped sail billows; far behind, a faint coastline. Silver mist drifts in layers "
+            "with soft light through the haze. A raven released from the bow flies ahead as if guiding the ship.\""
+        )
+    else:
+        body = (
+            "- ใส่ฉากหน้าและฉากหลังพอสังเขป และของประกอบ 1-2 อย่างที่เกี่ยวกับข้อเท็จจริงของฉากนั้น\n"
+            "- ระบุแสงหรือบรรยากาศสั้นๆ 1 อย่าง\n"
+            "- จุดโฟกัสหลักต้องชัดเจน ไม่ให้ภาพรก"
+        )
+    tail = (
+        "\n- IDENTITY LOCK ใช้กับกลุ่มคนหรือกลุ่มสัตว์ได้ด้วย เช่น IDENTITY LOCK: [Viking rowers: bearded men in wool tunics, "
+        "round wooden shields, braided hair] ถ้ากลุ่มนั้นปรากฏหลายฉาก ให้คัดลอกข้อความเดิมคำต่อคำเพื่อให้หน้าตาและชุดคงที่ทั้งคลิป\n"
+        "- ห้ามมีตัวหนังสือ ตัวเลข เครื่องหมายคำพูด บอลลูนคำพูด หรือข้อความใดๆ ในภาพ ป้าย ใบเรือ โล่ และผนังต้องเป็นพื้นผิวเปล่า"
+    )
+    return common_head + body + tail
 
 # หมวดหัวข้อประจำวัน (หมุนตามเลขวันของปี UTC) กันหัวข้อกลุ่มเดียวกันออกติดกันหลายวัน
 CATEGORIES = [
@@ -113,21 +183,21 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - {voice_guide}
 {voice_arc}- อารมณ์ต้องพอดี ไม่เล่นใหญ่ และเปลี่ยนตามเนื้อหาแต่ละฉาก ไม่จำเป็นต้องเปลี่ยนอารมณ์ทุกฉาก
 - บทพากย์รวมกัน {min_c}-{max_c} ตัวอักษร แบ่งเป็น {min_s}-{max_s} ฉาก
-- แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียว ชัดเจน เป็นภาพแนวตั้ง (9:16)
+{kw_rule}- แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียวที่มีจุดโฟกัสหลักชัดเจน เป็นภาพแนวตั้ง (9:16) ตามกฎ image_prompt ด้านล่าง
 - ความหลากหลายของภาพ: เลือกสิ่งที่เหมาะกับ narration ของแต่ละฉากจริง ๆ ทั้งสัตว์ สิ่งของ บุคคล สถานที่ ธรรมชาติ ภูมิประเทศ และภาพตัดขวาง ไม่ใช้สัตว์หรือตัวละครเดิมเป็นภาพประกอบทุกฉากโดยไม่มีเหตุผล
 - ความคงที่ของเอกลักษณ์ (Visual Consistency): อ่านบททั้งหมดก่อนแบ่งภาพ หากมีตัวละคร/สัตว์/วัตถุ "ตัวเดิม" ปรากฏซ้ำในหลายฉาก ต้องเป็นชนิด/ตัวเดียวกันและคงเอกลักษณ์เดิม เช่น สายพันธุ์ รูปร่าง สัดส่วน สี ลวดลาย จุดเด่น และเครื่องหมายเฉพาะ ห้ามเปลี่ยนเป็นสัตว์คนละชนิดหรือเปลี่ยนสี/ลายโดยไม่มีเหตุผล
 - สำหรับทุกฉากที่มีตัวเดิม ให้ใส่ IDENTITY LOCK ไว้ใน image_prompt เป็น "บรรทัดแยกท้ายข้อความ" (ขึ้นบรรทัดใหม่ด้วยอักขระ \n ใน JSON) ในรูปแบบเป๊ะๆ: IDENTITY LOCK: [คำอธิบายภาษาอังกฤษ] โดยต้องครอบคำอธิบายด้วยวงเล็บเหลี่ยม [ ] เสมอ และห้ามใส่ [ ] ซ้อนข้างใน ห้ามใส่คำบรรยายฉากไว้ในวงเล็บเหลี่ยม คัดลอกคำอธิบายชุดเดิมแบบคำต่อคำทุกตัวอักษรในทุกฉากที่กล่าวถึงตัวนั้น ให้ขึ้นต้นด้วยชื่อสามัญที่ชัดเจนของชนิด/สายพันธุ์/ประเภท (เช่น "A European robin (Erithacus rubecula)" หรือ "A red-eared slider turtle") ตามด้วยสี ลวดลาย สัดส่วน และจุดเด่น ห้ามใช้คำกว้าง ๆ เช่น "a bird" หรือ "an animal" อย่างเดียว ตัวอย่าง image_prompt: "The robin sings on a mossy branch at dawn, wide shot.\nIDENTITY LOCK: [A European robin (Erithacus rubecula), orange-red face and breast, olive-brown back, white belly, small round body, thin dark legs]"
 - เปลี่ยนได้เฉพาะท่าทาง กิจกรรม สีหน้า มุมกล้อง และสภาพแวดล้อมตาม narration แต่ห้ามเปลี่ยนเอกลักษณ์หลัก หากฉากไม่ได้กล่าวถึงตัวเดิมก็ไม่ต้องใส่ตัวนั้น
 - หากมีสัตว์ชนิดใหม่หรือตัวละครใหม่ ให้สร้าง IDENTITY LOCK ใหม่ของตัวนั้น ไม่เอาคำอธิบายของตัวก่อนหน้ามาใช้
 - แต่ละฉากต้องบรรยายภาพให้ครบในตัวเอง โดยไม่ใช้คำว่า "same as previous image"; คัดลอกข้อความ IDENTITY LOCK ฉบับเต็มแทน (ภาพทั้งหมดจะเป็นการ์ตูนสีน้ำ)
-- image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรง ห้ามเป็นภาพบรรยากาศทั่วไปที่ไม่เกี่ยวกับประโยคนั้น เลือกจุดโฟกัสหลักให้ชัด
+- image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรง ห้ามเป็นภาพบรรยากาศทั่วไปที่ไม่เกี่ยวกับประโยคนั้น
 - ถ้าสิ่งที่พูดถึงมองไม่เห็นจากภายนอก (เช่น ใต้ดิน ภายในร่างกาย จุลชีพ ใต้ทะเลลึก ภายในอะตอม) ให้ image_prompt เป็นภาพตัดขวางหรือภาพขยายใกล้ที่เห็นสิ่งนั้นชัดเจน ขึ้นต้นด้วยคำว่า cross-section cutaway view หรือ close-up macro view เช่น cross-section cutaway view of soil showing tree roots connected by thin glowing fungal threads
 - ถ้าฉากเป็นภาพตัดขวาง/ภาพขยายใกล้ ให้บรรทัดแรกของ image_prompt ขึ้นต้นด้วย cross-section cutaway view หรือ close-up macro view แล้วค่อยมีบรรทัด IDENTITY LOCK ตามหลัง (ถ้ามี)
-- ห้ามมีตัวหนังสือ ตัวเลข เครื่องหมายคำพูด บอลลูนคำพูด หรือข้อความใดๆ ในภาพ
+{image_rules}
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป",
-  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}", "image_prompt": "..."}}]}}"""
+  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}",{kw_field} "image_prompt": "..."}}]}}"""
 
 
 class NonRetryable(Exception):
@@ -153,11 +223,15 @@ def call_gemini(prompt: str, model: str) -> str:
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.9,
+                "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
             },
         },
     )
     check_status(f"gemini:{model}", r)
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    cand = r.json()["candidates"][0]
+    if cand.get("finishReason") == "MAX_TOKENS":
+        print(f"WARNING: [gemini:{model}] คำตอบถูกตัดที่เพดานโทเคน ({GEMINI_MAX_OUTPUT_TOKENS}) JSON อาจไม่สมบูรณ์")
+    return cand["content"]["parts"][0]["text"]
 
 
 def call_groq(prompt: str, model: str) -> str:
@@ -168,7 +242,7 @@ def call_groq(prompt: str, model: str) -> str:
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": prompt}],
         # โควตาฟรีของ Groq จำกัดโทเคน/นาทีต่ำ (~8K) จึงจำกัดการ "คิด" และความยาวคำตอบ
-        "max_completion_tokens": 6000,
+        "max_completion_tokens": GROQ_MAX_TOKENS,
     }
     if "gpt-oss" in model:
         body["reasoning_effort"] = "low"
@@ -194,6 +268,7 @@ def norm(t: str) -> str:
 GENERIC_IDENTITY_HEADS = {
     "bird", "animal", "creature", "character", "person", "man", "woman", "child", "boy", "girl",
     "insect", "bug", "fish", "plant", "tree", "flower", "thing", "object", "mammal", "reptile",
+    "men", "women", "people", "persons", "children", "kids", "humans", "group", "crowd",
 }
 
 
@@ -260,8 +335,16 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
             continue
         if not str(s.get("narration", "")).strip():
             errs.append(f"ฉาก {i}: narration ว่าง")
-        if len(str(s.get("image_prompt", "")).strip()) < 15:
+        img = str(s.get("image_prompt", "")).strip()
+        if len(img) < 15:
             errs.append(f"ฉาก {i}: image_prompt สั้นเกินไป")
+        else:
+            # v3.8: นับคำของคำบรรยายฉาก (ไม่นับบรรทัด IDENTITY LOCK) ให้ได้ตามระดับ IMAGE_DETAIL_LEVEL
+            words = len(strip_identity(img).split())
+            if words < IMG_MIN_WORDS:
+                errs.append(f"ฉาก {i}: image_prompt สั้นเกินไป ({words} คำ) ต้องบรรยายอย่างน้อย {IMG_MIN_WORDS} คำ (เป้า {IMG_ASK_MIN}-{IMG_ASK_MAX}) ตามกฎ image_prompt")
+            elif words > IMG_MAX_WORDS:
+                errs.append(f"ฉาก {i}: image_prompt ยาวเกินไป ({words} คำ) ต้องไม่เกิน {IMG_MAX_WORDS} คำ (เป้า {IMG_ASK_MIN}-{IMG_ASK_MAX})")
         direction = str(s.get("voice_direction", "")).strip().lower()
         if direction not in VOICE_DIRECTIONS:
             # ไม่ปฏิเสธทั้งบท (กันเสียโควตา retry) -> เติม informative แล้วเตือนใน log
@@ -269,6 +352,20 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
             direction = "informative"
         s["voice_direction"] = direction
         s["id"] = i
+        if KEYWORDS_ENABLED:
+            # v3.9: keywords ต้องเป็นข้อความที่อยู่ใน narration ตรงตัว ไม่ถูกต้อง -> ตัดคำนั้นทิ้ง + WARNING (ไม่ปฏิเสธทั้งบท)
+            narr = str(s.get("narration", ""))
+            raw_kws = s.get("keywords") or []
+            if isinstance(raw_kws, str):
+                raw_kws = [raw_kws]
+            clean = []
+            for k in raw_kws if isinstance(raw_kws, list) else []:
+                k = str(k).strip()
+                if 2 <= len(k) <= KEYWORD_MAX_CHARS and k in narr and k not in KEYWORD_STOPWORDS and k not in clean:
+                    clean.append(k)
+                else:
+                    print(f"WARNING: ฉาก {i}: keyword '{k}' ไม่อยู่ใน narration ตรงตัว/ไม่เหมาะ -> ตัดทิ้ง")
+            s["keywords"] = clean[:2]
     used_dirs = [s.get("voice_direction") for s in scenes if isinstance(s, dict) and s.get("voice_direction")]
     if len(used_dirs) >= 4 and len(set(used_dirs)) == 1:
         print(f"WARNING: ทุกฉากใช้อารมณ์เดียวกัน ({used_dirs[0]}) ตรวจว่าเหมาะกับเนื้อหาหรือไม่")
@@ -305,8 +402,11 @@ def main():
         voice_guide=voice_prompt_lines()[1],
         voice_arc=voice_prompt_lines()[2],
         voice_options="|".join(ENABLED_DIRECTIONS),
+        image_rules=image_rules(),
+        kw_rule=keyword_prompt_parts()[0],
+        kw_field=keyword_prompt_parts()[1],
     )
-    print(f"หมวดประจำวัน: {todays_category()}")
+    print(f"หมวดประจำวัน: {todays_category()} | ระดับรายละเอียดภาพ: {IMAGE_DETAIL_LEVEL}")
 
     # (ชื่อผู้ให้บริการ, โมเดล, ฟังก์ชัน)
     providers = []
