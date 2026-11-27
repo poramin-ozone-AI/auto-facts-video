@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # กดรันเองเพื่อทดสอบ
     inputs:
       test_mode:
-        description: "โหมดทดสอบ: เขียนบท + สร้างเสียง 2 บท + สร้างภาพ 2 ฉาก ข้ามการเรนเดอร์ (ไม่บันทึกหัวข้อ) เอาเครื่องหมายถูกออกเพื่อรันเต็ม"
+        description: "โหมดทดสอบ: เขียนบท + สร้างเสียง 2 บท + สร้างภาพ 2 ฉาก + เรนเดอร์ตัวอย่าง 2 ฉากพร้อมซับ (test_output.mp4) ไม่บันทึกหัวข้อ เอาเครื่องหมายถูกออกเพื่อรันเต็ม"
         type: boolean
         default: true
 
@@ -46,7 +46,15 @@ jobs:
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
       CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
       CF_IMAGE_STEPS: "6"
+      IMAGE_DETAIL_LEVEL: "rich"   # v3.8: rich = ภาพละเอียด มีคน/ฉากหน้า-หลัง/ของประกอบ, standard = ปานกลาง (ใช้ถ้าภาพแน่นเกินหรือโมเดลทำตาม prompt ไม่ครบ)
       ENABLE_POLLINATIONS: "1"
+      SUBTITLES_ENABLED: "1"            # v3.9: ซับเบิร์นลงวิดีโอ + output/subtitles.srt (0 = ปิด)
+      SUBTITLE_KEYWORDS_ENABLED: "1"    # คำสำคัญสีเหลือง (0 = ซับขาวล้วน และไม่ขอ keywords จาก AI)
+      SUBTITLE_FONT: "Loma"             # ฟอนต์ไทย (ติดตั้งจาก fonts-thai-tlwg ในขั้นติดตั้ง)
+      SUBTITLE_FONT_SIZE: "54"
+      SUBTITLE_MAX_CHARS: "22"          # ตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว)
+      SUBTITLE_MARGIN_BOTTOM: "230"     # ระยะจากขอบล่าง (~18% ของ 1280) เลี่ยงปุ่ม Shorts/TikTok
+      SUBTITLE_HIGHLIGHT_COLOR: "#FFD93B"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -59,7 +67,7 @@ jobs:
 
       - name: Install system & Python dependencies
         run: |
-          sudo apt-get update -y && sudo apt-get install -y ffmpeg
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg fonts-thai-tlwg fontconfig
           pip install -r requirements.txt
 
       - name: 0) Check model names (เตือนอย่างเดียว ไม่ทำให้ล้ม)
@@ -86,8 +94,12 @@ jobs:
           fi
 
       - name: 4) Render Video
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true' }}
-        run: python scripts/4_render_video.py
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.test_mode }}" = "true" ]; then
+            python scripts/4_render_video.py --test
+          else
+            python scripts/4_render_video.py
+          fi
 
       - name: Upload final video & script artifact
         if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true') }}
@@ -96,6 +108,7 @@ jobs:
           name: daily-video-${{ github.run_number }}
           path: |
             output/output.mp4
+            output/subtitles.srt
             output/script.json
           retention-days: 14
 
@@ -122,6 +135,9 @@ jobs:
             output/script.json
             output/audio/*.mp3
             output/images/scene_*.png
+            output/test_output.mp4
             output/output.mp4
+            output/subtitles.srt
+            output/subs/*.ass
           retention-days: 7
           if-no-files-found: ignore
