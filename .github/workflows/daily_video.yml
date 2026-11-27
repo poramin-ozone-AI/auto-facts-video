@@ -40,9 +40,12 @@ jobs:
       VOICE_RATE: "+0%"       # เสียงสำรอง edge-tts (v3.7 ปรับจาก -8% ให้ใกล้ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง)
       VOICE_PITCH: "-2Hz"
       SCRIPT_MIN_CHARS: "520"   # ความยาวบทพากย์รวมขั้นต่ำ/สูงสุด (ตัวอักษร) ถ้าคลิปสั้นเกินให้ขยับ MIN ขึ้น
-      SCRIPT_MAX_CHARS: "1250"
+      SCRIPT_MAX_CHARS: "900"
+      SCRIPT_TEMPERATURE: "0.65"
       VOICE_DIRECTIONS_ENABLED: "curious,informative,excited,mysterious,emphatic,warm"   # ตัดอารมณ์ที่ฟังแล้วไม่ต่างออกได้
-      AUDIO_TAIL_PAD: "0.4"   # เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที)
+      VOICE_PER_SCENE_EMOTION: "0"   # v4.0: 0 = เสียงเดียวกันทุกฉาก, 1 = เปลี่ยนอารมณ์ตามฉากแบบ v3.7
+      AUDIO_TAIL_PAD: "0.2"
+      WHISPER_MODEL: "tiny"   # faster-whisper CPU int8
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
       CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
       CF_IMAGE_STEPS: "6"
@@ -51,9 +54,9 @@ jobs:
       SUBTITLES_ENABLED: "1"            # v3.9: ซับเบิร์นลงวิดีโอ + output/subtitles.srt (0 = ปิด)
       SUBTITLE_KEYWORDS_ENABLED: "1"    # คำสำคัญสีเหลือง (0 = ซับขาวล้วน และไม่ขอ keywords จาก AI)
       SUBTITLE_FONT: "Loma"             # ฟอนต์ไทย (ติดตั้งจาก fonts-thai-tlwg ในขั้นติดตั้ง)
-      SUBTITLE_FONT_SIZE: "54"
+      SUBTITLE_FONT_SIZE: "78"
       SUBTITLE_MAX_CHARS: "22"          # ตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว)
-      SUBTITLE_MARGIN_BOTTOM: "230"     # ระยะจากขอบล่าง (~18% ของ 1280) เลี่ยงปุ่ม Shorts/TikTok
+      SUBTITLE_MARGIN_BOTTOM: "345"     # ระยะจากขอบล่าง (~18% ของ 1920) เลี่ยงปุ่ม Shorts/TikTok
       SUBTITLE_HIGHLIGHT_COLOR: "#FFD93B"
     steps:
       - name: Checkout repository
@@ -64,6 +67,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - name: Cache faster-whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: whisper-tiny-${{ runner.os }}
 
       - name: Install system & Python dependencies
         run: |
@@ -100,6 +109,9 @@ jobs:
           else
             python scripts/4_render_video.py
           fi
+
+      - name: 6) Final quality check
+        run: python scripts/6_quality_check.py $([ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.test_mode }}" = "true" ] && echo output/test_output.mp4 || echo output/output.mp4)
 
       - name: Upload final video & script artifact
         if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true') }}
