@@ -12,18 +12,20 @@ auto-facts-video/
 ├── assets/
 │   └── .gitkeep
 ├── scripts/
-│   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ (ไม่ล็อกตัวละคร)
+│   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ + มุมกล้อง + ตัวดึง IDENTITY LOCK
 │   ├── 0_check_models.py               # ขั้น 0: เตือนถ้าชื่อโมเดล Gemini ที่ตั้งไว้ไม่อยู่ในรายการของ API (ไม่ทำให้ล้ม)
 │   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง; หมุนหมวดหัวข้อตามวัน)
 │   ├── 2_generate_voice.py             # ขั้น 2: เสียงพากย์ (Gemini TTS 3.8 -> edge-tts สำรองทั้งคลิป)
 │   ├── 3_generate_images.py            # ขั้น 3: ภาพ 9:16 สไตล์สีน้ำ (Cloudflare FLUX.2 klein -> FLUX.1 schnell -> Pollinations)
-│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งช้าๆ + รวมเสียงเป็น output.mp4
-│   └── 5_save_history.py               # ขั้น 5: บันทึกหัวข้อที่ใช้แล้ว (ทำหลังคลิปสำเร็จเท่านั้น)
+│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งเข้ากลางภาพช้าๆ (1.00→1.05) + รวมเสียงเป็น output.mp4
+│   ├── 5_save_history.py               # ขั้น 5: บันทึกหัวข้อที่ใช้แล้ว (ทำหลังคลิปสำเร็จเท่านั้น)
+│   └── compare_flux_models.py          # ทดสอบแยก FLUX.2 klein 4B เทียบ 9B (ไม่กระทบงานผลิต)
 ├── output/
 │   └── topics_history.txt              # สร้างอัตโนมัติ: บันทึกหัวข้อที่ใช้แล้ว (commit กลับ repo)
 ├── .gitignore
 ├── requirements.txt
-└── README.md
+├── README.md
+└── PROJECT_SPEC.md                     # สเปกฉบับสมบูรณ์ (อ้างอิงตามโค้ดเป็นหลัก)
 ```
 
 ---
@@ -93,9 +95,9 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 **ข้อควรระวัง:** FLUX.2 klein 9B ใช้ Neurons สูงกว่า 4B มาก ควรตรวจยอด/โควตาก่อนรันทดสอบ
 
 
-## v3.2 ปรับปรุง: Visual Consistency
-- เพิ่มคำสั่งให้วางแผนตัวละคร/สัตว์/วัตถุที่ปรากฏซ้ำจากบททั้งหมดก่อนเขียน prompt
-- เพิ่ม `IDENTITY LOCK:` ใน image_prompt โดยคง schema ของ script.json เดิม และคัดลอก descriptor เดิมทุกฉากที่มีตัวเดิม
-- อนุญาตให้เปลี่ยนท่าทาง/กิจกรรม/มุมกล้อง/ฉาก แต่ห้ามเปลี่ยนชนิด สี ลวดลาย สัดส่วน และจุดเด่น
-- ความหลากหลายยังคงแยกจาก identity: ฉากที่ไม่พูดถึงตัวเดิมใช้สิ่งอื่นได้เต็มที่
-- เป็น text-only consistency; ไม่รับประกันความเหมือน 100% เพราะยังไม่ส่งภาพอ้างอิงให้โมเดล
+## ความคงที่ของตัวละคร (IDENTITY LOCK) — v3.5
+- ตัว/สัตว์/วัตถุที่ปรากฏซ้ำหลายฉากต้องมีบรรทัดแยกท้าย `image_prompt` รูปแบบ `IDENTITY LOCK: [A European robin (Erithacus rubecula), ...]` คัดลอกคำต่อคำทุกฉาก
+- `1_generate_script.py` ตรวจรูปแบบ ความชัดเจนของชื่อชนิด และความเหมือนกันของข้อความ ไม่ผ่านจะขอบทใหม่อัตโนมัติ
+- ภาพตัดขวาง/ภาพขยายใกล้ (`cross-section` / `close-up macro`) จะไม่ถูกใส่มุมกล้องจาก `SHOTS` ซ้ำ
+- เป็น text-only ไม่รับประกันความเหมือน 100% เพราะไม่ส่งภาพอ้างอิงให้โมเดล
+- ข้อจำกัดที่ทราบดูหัวข้อ 10 ใน `PROJECT_SPEC.md`
