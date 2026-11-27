@@ -1,4 +1,4 @@
-"""Render still illustrations with a gentle, centered smoothstep zoom (1.00 -> 1.05) + burned-in Thai subtitles (v3.9).
+"""Render still illustrations with a gentle, centered, constant-speed linear zoom (1.00 -> 1.05) + burned-in Thai subtitles (v3.9).
 
 python scripts/4_render_video.py          เรนเดอร์เต็ม -> output/output.mp4 (+ output/subtitles.srt)
 python scripts/4_render_video.py --test   เรนเดอร์ตัวอย่างเฉพาะฉากทดสอบ (จาก output/test_scenes.json) -> output/test_output.mp4
@@ -18,9 +18,10 @@ TEST_MP4 = OUT / "test_output.mp4"
 SUBS_DIR = OUT / "subs"
 SRT_PATH = OUT / "subtitles.srt"
 FPS = 30
-W, H = 720, 1280
+W, H = 1080, 1920
 
 ZOOM_END = 0.05  # ซูมเข้ากลางภาพรวม 5%
+ZOOM_UPSCALE = 2  # v4.0: ขยายภาพก่อนซูม 4 เท่า (เดิม 2) ให้การปัดเศษพิกเซลของ zoompan เล็กลงจนไม่เห็นเป็นอาการสั่น
 
 def probe_media(path: pathlib.Path) -> dict:
     r = subprocess.run(
@@ -42,18 +43,16 @@ def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: 
 
     dur = float(scene["duration"])
     frames = max(1, int(round(dur * FPS)))
-    # Smoothstep easing: slow start/end, steady motion in the middle.
-    t = f"min(max(on/{max(1, frames-1)},0),1)"
-    eased = f"({t})*({t})*(3-2*({t}))"
-    zoom = f"1+{ZOOM_END}*{eased}"
-    # Always zoom into the exact image center (never leaves the frame, no empty borders).
+    # v4.0: ซูมเส้นตรงความเร็วคงที่ (ไม่มี ease) จาก 1.00 ถึง 1+ZOOM_END ในเฟรมสุดท้าย
+    zoom = f"1+{ZOOM_END}*min(on,{max(1, frames-1)})/{max(1, frames-1)}"
+    # ซูมเข้าจุดกึ่งกลางภาพเป๊ะ (ไม่ออกนอกกรอบ ไม่มีขอบว่าง)
     x = "iw/2-iw/zoom/2"
     y = "ih/2-ih/zoom/2"
     base_vf = (
-        f"scale={W*2}:{H*2}:flags=lanczos,"
+        f"scale={W*ZOOM_UPSCALE}:{H*ZOOM_UPSCALE}:flags=lanczos,"
         f"zoompan=z='{zoom}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS}"
     )
-    print(f"  ซูมกลางภาพ 1.00->{1+ZOOM_END:.2f} | {frames} เฟรม" + (" | + ซับ" if ass_path else ""))
+    print(f"  ซูมกลางภาพเส้นตรง 1.00->{1+ZOOM_END:.2f} | {frames} เฟรม" + (" | + ซับ" if ass_path else ""))
 
     def run(vf: str):
         cmd = [
@@ -123,8 +122,9 @@ def main():
     print(f"รวมทุกฉากเป็น {final_mp4}...")
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-        "-i", str(concat_list), "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+        "-i", str(concat_list), "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "160k", "-af",
+        "loudnorm=I=-14:TP=-1.0:LRA=7:print_format=summary", "-movflags", "+faststart",
         str(final_mp4),
     ], check=True)
     if not final_mp4.exists() or final_mp4.stat().st_size < 50_000:

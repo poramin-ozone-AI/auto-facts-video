@@ -26,6 +26,7 @@ import time
 import urllib.parse
 import requests
 from style import build_prompt
+from image_quality import inspect_image
 
 OUT = pathlib.Path("output")
 IMG = OUT / "images"
@@ -241,8 +242,20 @@ def main():
         print(f"ฉาก {s['id']}")
         raw = IMG / f"raw_{s['id']:02d}.png"
         final = IMG / f"scene_{s['id']:02d}.png"
-        name = generate(build_prompt(s), raw, providers, dead)
+        prompt = build_prompt(s)
+        name = generate(prompt, raw, providers, dead)
         to_9x16(raw, final)
+        qc_issues = inspect_image(final)
+        if qc_issues:
+            print(f"  Image QC ไม่ผ่านจาก {name}: {'; '.join(qc_issues)} -> ลองผู้ให้บริการสำรอง")
+            dead.add(name)
+            raw.unlink(missing_ok=True)
+            final.unlink(missing_ok=True)
+            name = generate(prompt, raw, providers, dead)
+            to_9x16(raw, final)
+            qc_issues = inspect_image(final)
+            if qc_issues:
+                sys.exit(f"Image QC ไม่ผ่านฉาก {s['id']} แม้ใช้ตัวสำรอง: {'; '.join(qc_issues)} | หยุดเพื่อไม่ใช้ภาพเสี่ยง")
         s["image"] = str(final)
         s["image_provider"] = name
         used.append(name)

@@ -43,7 +43,7 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 # เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที -> 40-90 วิ ~ 520-1250 ตัวอักษร (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
 # (v3.5 เป็น 450-1400 ซึ่งหลุดช่วง 40-90 วินาทีได้ทั้งสองด้าน)
 MIN_CHARS = int(os.getenv("SCRIPT_MIN_CHARS", "520"))
-MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "1250"))
+MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "900"))
 MIN_SCENES, MAX_SCENES = 6, 12
 # เพดานโทเคนคำตอบ (v3.8: image_prompt ยาวขึ้น) Gemini นับโทเคนที่ "คิด" รวมด้วย จึงตั้งสูงไว้ก่อน
 GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "16384"))
@@ -177,7 +177,9 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 
 เงื่อนไข:
 - เลือกข้อเท็จจริงที่ตรวจสอบได้จริงทางวิทยาศาสตร์ ประวัติศาสตร์ ธรรมชาติ หรือจิตวิทยา ห้ามแต่งหรือเดา ถ้าไม่มั่นใจให้เลือกเรื่องอื่น
+- เพิ่ม source_hint เป็นลิสต์ชื่อแหล่งข้อมูล/หน่วยงานที่น่าเชื่อถือ 2-4 แห่งที่เกี่ยวข้องกับข้อเท็จจริงสำคัญ เพื่อใช้ตรวจสอบภายหลัง ห้ามแต่ง URL หรืออ้างว่าได้เปิดอ่านแหล่งข้อมูลแล้ว
 - เปิดด้วยประโยคดึงความสนใจใน 1-2 ประโยคแรก และปิดด้วยประโยคสรุปสั้นๆ ที่น่าจดจำ
+- ใน narration ให้เขียนตัวเลขทศนิยม หน่วย และตัวย่อวิทยาศาสตร์เป็นคำอ่านภาษาไทยที่ TTS อ่านได้เป็นธรรมชาติ เช่น 37.2 เป็น “สามสิบเจ็ดจุดสอง” และ CO₂ เป็น “คาร์บอนไดออกไซด์”; คงรูปแบบตัวเลขใน image_prompt ได้ตามความเหมาะสม
 - น้ำเสียงบทโดยรวมเป็นมิตร น่าเชื่อถือ และเล่าอย่างเป็นธรรมชาติ เหมาะกับคลิปความรู้สั้น
 - กำหนด voice_direction ให้ทุกฉากตามอารมณ์ของเนื้อหา เลือกได้เฉพาะ: {voice_names}
 - {voice_guide}
@@ -189,14 +191,14 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - สำหรับทุกฉากที่มีตัวเดิม ให้ใส่ IDENTITY LOCK ไว้ใน image_prompt เป็น "บรรทัดแยกท้ายข้อความ" (ขึ้นบรรทัดใหม่ด้วยอักขระ \n ใน JSON) ในรูปแบบเป๊ะๆ: IDENTITY LOCK: [คำอธิบายภาษาอังกฤษ] โดยต้องครอบคำอธิบายด้วยวงเล็บเหลี่ยม [ ] เสมอ และห้ามใส่ [ ] ซ้อนข้างใน ห้ามใส่คำบรรยายฉากไว้ในวงเล็บเหลี่ยม คัดลอกคำอธิบายชุดเดิมแบบคำต่อคำทุกตัวอักษรในทุกฉากที่กล่าวถึงตัวนั้น ให้ขึ้นต้นด้วยชื่อสามัญที่ชัดเจนของชนิด/สายพันธุ์/ประเภท (เช่น "A European robin (Erithacus rubecula)" หรือ "A red-eared slider turtle") ตามด้วยสี ลวดลาย สัดส่วน และจุดเด่น ห้ามใช้คำกว้าง ๆ เช่น "a bird" หรือ "an animal" อย่างเดียว ตัวอย่าง image_prompt: "The robin sings on a mossy branch at dawn, wide shot.\nIDENTITY LOCK: [A European robin (Erithacus rubecula), orange-red face and breast, olive-brown back, white belly, small round body, thin dark legs]"
 - เปลี่ยนได้เฉพาะท่าทาง กิจกรรม สีหน้า มุมกล้อง และสภาพแวดล้อมตาม narration แต่ห้ามเปลี่ยนเอกลักษณ์หลัก หากฉากไม่ได้กล่าวถึงตัวเดิมก็ไม่ต้องใส่ตัวนั้น
 - หากมีสัตว์ชนิดใหม่หรือตัวละครใหม่ ให้สร้าง IDENTITY LOCK ใหม่ของตัวนั้น ไม่เอาคำอธิบายของตัวก่อนหน้ามาใช้
-- แต่ละฉากต้องบรรยายภาพให้ครบในตัวเอง โดยไม่ใช้คำว่า "same as previous image"; คัดลอกข้อความ IDENTITY LOCK ฉบับเต็มแทน (ภาพทั้งหมดจะเป็นการ์ตูนสีน้ำ)
+- แต่ละฉากต้องบรรยายภาพให้ครบในตัวเอง โดยไม่ใช้คำว่า "same as previous image"; คัดลอกข้อความ IDENTITY LOCK ฉบับเต็มแทน (ภาพทั้งหมดจะเป็นการ์ตูนสีน้ำสไตล์ kawaii chibi น่ารัก ตัวละครหัวโต ตากลมดำ แก้มชมพู)
 - image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรง ห้ามเป็นภาพบรรยากาศทั่วไปที่ไม่เกี่ยวกับประโยคนั้น
 - ถ้าสิ่งที่พูดถึงมองไม่เห็นจากภายนอก (เช่น ใต้ดิน ภายในร่างกาย จุลชีพ ใต้ทะเลลึก ภายในอะตอม) ให้ image_prompt เป็นภาพตัดขวางหรือภาพขยายใกล้ที่เห็นสิ่งนั้นชัดเจน ขึ้นต้นด้วยคำว่า cross-section cutaway view หรือ close-up macro view เช่น cross-section cutaway view of soil showing tree roots connected by thin glowing fungal threads
 - ถ้าฉากเป็นภาพตัดขวาง/ภาพขยายใกล้ ให้บรรทัดแรกของ image_prompt ขึ้นต้นด้วย cross-section cutaway view หรือ close-up macro view แล้วค่อยมีบรรทัด IDENTITY LOCK ตามหลัง (ถ้ามี)
 {image_rules}
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
-{{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป",
+{{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป", "source_hint": ["ชื่อหน่วยงานหรือแหล่งข้อมูล"],
   "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}",{kw_field} "image_prompt": "..."}}]}}"""
 
 
@@ -222,7 +224,7 @@ def call_gemini(prompt: str, model: str) -> str:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "temperature": 0.9,
+                "temperature": float(os.getenv("SCRIPT_TEMPERATURE", "0.65")),
                 "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
             },
         },
@@ -238,7 +240,7 @@ def call_groq(prompt: str, model: str) -> str:
     key = os.environ["GROQ_API_KEY"]
     body = {
         "model": model,
-        "temperature": 0.9,
+        "temperature": float(os.getenv("SCRIPT_TEMPERATURE", "0.65")),
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": prompt}],
         # โควตาฟรีของ Groq จำกัดโทเคน/นาทีต่ำ (~8K) จึงจำกัดการ "คิด" และความยาวคำตอบ

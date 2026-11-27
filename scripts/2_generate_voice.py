@@ -18,11 +18,13 @@
   - EDGE_VOICE       (ค่าเริ่มต้น: th-TH-NiwatNeural)
   - VOICE_RATE       (ค่าเริ่มต้น: +0%  v3.7 ปรับจาก -8% ให้ใกล้จังหวะ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง)
   - VOICE_PITCH      (ค่าเริ่มต้น: -2Hz)
-  - AUDIO_TAIL_PAD   (ค่าเริ่มต้น: 0.4 วินาที เว้นความเงียบท้ายแต่ละฉาก)
+  - AUDIO_TAIL_PAD   (ค่าเริ่มต้น: 0.2 วินาที เว้นความเงียบท้ายแต่ละฉาก)
 โหมดทดสอบ: python scripts/2_generate_voice.py --test
   (สร้างเสียงแค่ 2 ฉาก: ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกใกล้กลางคลิปที่สุด; ไม่ทับ script.json
    ไม่ตรวจช่วงความยาวรวม; ใช้ผู้ให้บริการ/fallback ตามปกติ ดูบรรทัดสรุปว่าเป็น gemini หรือ edge)
-  - voice_direction ในแต่ละ scene: curious / informative / excited / mysterious / emphatic / warm
+  - VOICE_PER_SCENE_EMOTION (v4.0 ค่าเริ่มต้น: 0) 0 = ใช้สไตล์เสียงเดียวกันทุกฉาก (เสียงคงที่ทั้งคลิป)
+    1 = เปิดอารมณ์ตาม voice_direction รายฉากแบบ v3.7 (ผู้ใช้พบว่าเสียงเปลี่ยนเมื่อเปลี่ยนฉาก จึงปิดเป็นค่าเริ่มต้น)
+  - voice_direction ในแต่ละ scene (v4.0: ไม่ถูกใช้กับ TTS เมื่อ VOICE_PER_SCENE_EMOTION=0): curious / informative / excited / mysterious / emphatic / warm
     (ถ้า script.json รุ่นเก่าไม่มีฟิลด์นี้ จะใช้ informative)
 """
 import asyncio
@@ -51,12 +53,13 @@ GEMINI_TTS_MODELS = [GEMINI_TTS_MODEL] + [m for m in GEMINI_TTS_FALLBACKS if m !
 USED_TTS_MODEL = None
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Orus")
 GEMINI_TTS_DELAY = float(os.getenv("GEMINI_TTS_DELAY", "31"))
+PER_SCENE_EMOTION = os.getenv("VOICE_PER_SCENE_EMOTION", "0").strip().lower() in ("1", "true", "yes", "on")
 
 EDGE_VOICE = os.getenv("EDGE_VOICE", os.getenv("VOICE", "th-TH-NiwatNeural"))
 RATE = os.getenv("VOICE_RATE", "+0%")
 PITCH = os.getenv("VOICE_PITCH", "-2Hz")
 
-TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.4"))  # วินาที: เว้นความเงียบท้ายเสียงแต่ละฉาก ให้จังหวะไม่รีบ
+TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.2"))  # วินาที: เว้นความเงียบท้ายเสียงแต่ละฉาก ให้จังหวะไม่รีบ
 
 MIN_TOTAL_WARN, MAX_TOTAL_WARN = 35.0, 95.0
 MIN_TOTAL_HARD, MAX_TOTAL_HARD = 15.0, 150.0
@@ -182,7 +185,8 @@ VOICE_DIRECTION_STYLES = {
 
 def build_tts_style(voice_direction: str = "informative") -> str:
     """รวมบุคลิกเสียงหลักกับอารมณ์เฉพาะฉาก; รองรับ script.json รุ่นเก่าที่ไม่มี voice_direction"""
-    direction = str(voice_direction or "informative").strip().lower()
+    # v4.0: ค่าเริ่มต้นใช้สไตล์เดียวทั้งคลิป (informative) เพื่อให้น้ำเสียงเหมือนกันทุกฉาก
+    direction = str(voice_direction or "informative").strip().lower() if PER_SCENE_EMOTION else "informative"
     if direction not in VOICE_DIRECTION_STYLES:
         direction = "informative"
     return f"{TTS_BASE_STYLE_EN} {VOICE_DIRECTION_STYLES[direction]}"
@@ -264,6 +268,8 @@ def pick_test_scenes(scenes: list[dict]) -> list[dict]:
         return list(scenes)
     first = scenes[0]
     mid = len(scenes) // 2
+    if not PER_SCENE_EMOTION:  # v4.0: เสียงไม่เปลี่ยนตามอารมณ์แล้ว เลือกฉากแรก + ฉากกลาง
+        return [first, scenes[mid]]
     for i in sorted(range(1, len(scenes)), key=lambda k: abs(k - mid)):
         if scene_direction(scenes[i]) != scene_direction(first):
             return [first, scenes[i]]
@@ -288,7 +294,7 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
         if direction not in VOICE_DIRECTION_STYLES:
             print(f"  WARNING: voice_direction '{direction}' ไม่รู้จัก -> ใช้ informative")
             direction = "informative"
-        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)} | emotion={direction}...")
+        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)} | emotion={direction if PER_SCENE_EMOTION else 'คงที่ทั้งคลิป'}...")
         candidates = [active_model] if active_model else GEMINI_TTS_MODELS
         last_err = None
         for model in candidates:

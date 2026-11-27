@@ -24,18 +24,18 @@ import re
 import subprocess
 import unicodedata
 
-W, H = 720, 1280
+W, H = 1080, 1920
 
 ENABLED = os.getenv("SUBTITLES_ENABLED", "1") != "0"
 KEYWORDS_ENABLED = ENABLED and os.getenv("SUBTITLE_KEYWORDS_ENABLED", "1") != "0"
 FONT = os.getenv("SUBTITLE_FONT", "Loma")
-FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "54"))
+FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "78"))
 MAX_CHARS = max(8, int(os.getenv("SUBTITLE_MAX_CHARS", "22")))
-MARGIN_BOTTOM = int(os.getenv("SUBTITLE_MARGIN_BOTTOM", "230"))
-MARGIN_SIDE = int(os.getenv("SUBTITLE_MARGIN_SIDE", "60"))
+MARGIN_BOTTOM = int(os.getenv("SUBTITLE_MARGIN_BOTTOM", "345"))
+MARGIN_SIDE = int(os.getenv("SUBTITLE_MARGIN_SIDE", "90"))
 OUTLINE = int(os.getenv("SUBTITLE_OUTLINE", "5"))
 HIGHLIGHT_COLOR = os.getenv("SUBTITLE_HIGHLIGHT_COLOR", "#FFD93B")
-TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.4"))  # ความเงียบท้ายเสียงแต่ละฉาก (ต้องตรงกับขั้น 2)
+TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.2"))  # ความเงียบท้ายเสียงแต่ละฉาก (ต้องตรงกับขั้น 2)
 
 # คำเชื่อม: ถ้าตัดได้ใกล้เคียงกัน ให้ตัดก่อนคำเหล่านี้ (ท่อนใหม่ขึ้นต้นด้วยคำเชื่อมอ่านลื่นกว่า)
 CONJUNCTIONS = {"และ", "แต่", "เพราะ", "ที่", "ซึ่ง", "เมื่อ", "หรือ", "จึง", "ก็", "แล้ว", "โดย", "จน", "ขณะที่", "ถ้า", "หาก"}
@@ -174,7 +174,7 @@ def make_chunks(narration: str, keywords: list[str] | None = None, max_chars: in
     return out
 
 
-def scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, str]]:
+def proportional_scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, str]]:
     """คืน [(เริ่ม, จบ, ข้อความ)] เวลาอิงจุดเริ่มของคลิปฉากนั้น"""
     duration = float(duration if duration is not None else scene["duration"])
     kws = [k for k in (scene.get("keywords") or []) if isinstance(k, str)] if KEYWORDS_ENABLED else []
@@ -192,6 +192,79 @@ def scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, 
         t += d
     cues[-1][1] = min(duration, speech + 0.3)
     return [(a, b, c) for a, b, c in cues]
+
+
+_WHISPER_MODEL = None
+_WHISPER_FAILED = False
+
+def scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, str]]:
+    """ใช้เวลา segment จาก faster-whisper แล้วกระจายข้อความต้นฉบับลงในช่วงเสียง; fallback เป็นสัดส่วนเดิมเมื่อโมเดลใช้ไม่ได้"""
+    global _WHISPER_MODEL, _WHISPER_FAILED
+    duration = float(duration if duration is not None else scene["duration"])
+    fallback = proportional_scene_cues(scene, duration)
+    audio = scene.get("audio")
+    if not audio or not pathlib.Path(audio).exists() or _WHISPER_FAILED:
+        return fallback
+    try:
+        if _WHISPER_MODEL is None:
+            from faster_whisper import WhisperModel
+            model_name = os.getenv("WHISPER_MODEL", "tiny")
+            _WHISPER_MODEL = WhisperModel(model_name, device="cpu", compute_type="int8")
+            print(f"โหลด faster-whisper {model_name} (CPU int8)")
+        segments, _ = _WHISPER_MODEL.transcribe(str(audio), language="th", word_timestamps=True, vad_filter=True)
+        segments = list(segments)
+        word_spans = []
+        segment_spans = []
+        for segment in segments:
+            sa, sb = float(segment.start), float(segment.end)
+            if sb > sa and str(segment.text).strip():
+                segment_spans.append((max(0.0,sa), min(duration,sb), str(segment.text).strip()))
+            for word in (getattr(segment, "words", None) or []):
+                wa, wb = float(word.start or 0.0), float(word.end or 0.0)
+                wt = str(word.word or "").strip()
+                if wt and wb > wa:
+                    word_spans.append((max(0.0,wa), min(duration,wb), wt))
+        # Prefer word timestamps when the model returns them; otherwise use segment timestamps.
+        spans = [(a,b,t) for a,b,t in (word_spans or segment_spans) if t and b>a]
+        if not spans:
+            return fallback
+        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k,str)] if KEYWORDS_ENABLED else [])
+        if not chunks:
+            return []
+        # Map cumulative character positions in the original narration onto Whisper segment intervals.
+        # This preserves the exact original Thai wording while using ASR-derived timing boundaries.
+        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k,str)] if KEYWORDS_ENABLED else [])
+        if not chunks:
+            return []
+        weights = [max(1, len(re.sub(r"\s", "", t))) for _,_,t in spans]
+        total_asr = float(sum(weights))
+        total_src = float(sum(max(1, len(re.sub(r"\s", "", t))) for t,_ in chunks))
+        def time_at(progress: float) -> float:
+            target = min(total_asr, max(0.0, progress * total_asr))
+            acc = 0.0
+            for (a,b,_), weight in zip(spans, weights):
+                if target <= acc + weight:
+                    frac = min(1.0, max(0.0, (target-acc)/weight))
+                    return a + (b-a)*frac
+                acc += weight
+            return spans[-1][1]
+        out=[]; cursor=0.0
+        for text, _ in chunks:
+            weight=max(1,len(re.sub(r"\s", "", text)))
+            start=time_at(cursor/total_src)
+            cursor += weight
+            end=time_at(cursor/total_src)
+            if end-start < 0.08:
+                end=min(duration,start+0.18)
+            if end>start:
+                out.append((max(0.0,start),min(duration,end),text))
+        if not out:
+            return fallback
+        return out
+    except Exception as e:
+        _WHISPER_FAILED = True
+        print(f"WARNING: faster-whisper ใช้ไม่ได้ ({type(e).__name__}: {e}) -> ใช้ timing แบบเดิม")
+        return fallback
 
 
 # ---------- เขียนไฟล์ ----------
