@@ -54,8 +54,10 @@ auto-facts-video/
 | `GEMINI_TTS_FALLBACK_MODELS` | (ว่าง) | รุ่นเสียงสำรอง ปล่อยว่างเพราะ `gemini-3.8-flash-lite-tts` ไม่รองรับภาษาไทย ถ้า 3.8 ใช้ไม่ได้จะไป edge-tts |
 | `GEMINI_VOICE` | `Orus` | เสียงพากย์ชาย (ตัวเลือกอื่น: `Charon`, `Algenib`, `Schedar`, `Fenrir`) |
 | `GEMINI_TTS_DELAY` | `31` | วินาทีที่เว้นระหว่างฉาก เพื่อไม่ให้เกินโควตาฟรี |
-| `EDGE_VOICE` / `VOICE_RATE` / `VOICE_PITCH` | `th-TH-NiwatNeural` / `-8%` / `-2Hz` | เสียงสำรอง edge-tts |
+| `EDGE_VOICE` / `VOICE_RATE` / `VOICE_PITCH` | `th-TH-NiwatNeural` / `+0%` / `-2Hz` | เสียงสำรอง edge-tts (v3.7 ปรับ rate จาก `-8%` เป็น `+0%` ให้ใกล้จังหวะ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง) |
 | `AUDIO_TAIL_PAD` | `0.4` | เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที) ให้จังหวะไม่รีบ |
+| `SCRIPT_MIN_CHARS` / `SCRIPT_MAX_CHARS` | `520` / `1250` | ความยาวบทพากย์รวม (ตัวอักษร) ถ้าคลิปสั้นกว่า 35 วินาทีบ่อย ให้ขยับค่าต่ำสุดขึ้น |
+| `VOICE_DIRECTIONS_ENABLED` | ทั้ง 6 แบบ | อารมณ์เสียงรายฉากที่เปิดใช้ (คั่นด้วยจุลภาค) ตัดแบบที่ฟังแล้วไม่ต่างออกได้ `informative` เปิดอยู่เสมอ |
 | `CF_IMAGE_MODEL` | `@cf/black-forest-labs/flux-2-klein-4b` | โมเดลภาพหลัก (สั่งขนาด 720×1280 ตรงๆ) |
 | `CF_IMAGE_FALLBACK_MODELS` | `@cf/black-forest-labs/flux-1-schnell` | โมเดลภาพสำรองบน Cloudflare |
 | `CF_IMAGE_STEPS` | `6` | จำนวนขั้นวาดภาพของ FLUX.1 schnell (1–8) ไม่มีผลกับ klein |
@@ -65,8 +67,8 @@ auto-facts-video/
 
 ## 3. วิธีทดสอบและใช้งาน
 
-1. แท็บ **Actions** → **daily-video** → **Run workflow** จะรันเต็มทุกขั้นเหมือนรอบอัตโนมัติ เมื่อสำเร็จจะได้ Artifact `daily-video-…` (`output.mp4` และ `script.json`) และบันทึกหัวข้อลง `output/topics_history.txt`
-2. หลังจากนั้นระบบรันเองทุกวัน 08:00 น. (เวลาไทย) หากรันล้มเหลวจะได้ Artifact `debug-…` สำหรับตรวจ log และไฟล์ที่สร้างไว้ และหัวข้อจะไม่ถูกนับว่าใช้แล้ว
+1. แท็บ **Actions** → **daily-video** → **Run workflow** (คง `test_mode` ติ๊กไว้) จะเขียนบท + สร้างเสียง **2 บท** + สร้างภาพ **2 ฉาก** แล้วดาวน์โหลด Artifact `debug-or-test-…` มาฟังเสียง/ดูภาพ (ข้ามการเรนเดอร์และไม่บันทึกหัวข้อ) ใน log ขั้น 2 จะแสดงอารมณ์ ความยาว และอัตราพูด (ตัวอักษร/วินาที) ของแต่ละบทให้เทียบกัน
+2. พอใจแล้ว รันอีกครั้งโดยเอาเครื่องหมายถูก `test_mode` ออก จะได้ Artifact `daily-video-…` (`output.mp4`) หลังจากนั้นระบบรันเองทุกวัน 08:00 น. รันที่ล้มเหลวจะได้ Artifact `debug-or-test-…` สำหรับตรวจและหัวข้อจะไม่ถูกนับว่าใช้แล้ว
 
 หัวข้อจะถูกบันทึกลง `output/topics_history.txt` **เฉพาะเมื่อคลิปสำเร็จ** รันที่ล้มเหลวจึงไม่เสียหัวข้อ
 
@@ -110,6 +112,8 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 - ความเร็วตั้งเป้ากระฉับกระเฉงขึ้นประมาณ 8–10% จากการอ่านสารคดีแบบเนิบช้า โดยเป็นคำสั่งใน style prompt ไม่ใช่การปรับ rate แบบตัวเลข
 - ยังคง Gemini TTS และเสียง `Orus` เป็นค่าเริ่มต้น บท `narration` ที่ส่งเข้า TTS ไม่ถูกเติมคำสั่งสไตล์
 - ไฟล์ `script.json` รุ่นเก่าที่ไม่มี `voice_direction` จะใช้ `informative` โดยอัตโนมัติ
-- Edge TTS fallback ยังสร้างใหม่ทั้งคลิปด้วยเสียงและ rate/pitch เดิม โดยยังไม่ใช้อารมณ์แยกฉาก
+- Edge TTS fallback ยังสร้างใหม่ทั้งคลิปด้วยเสียงเดิม (rate ปรับเป็น `+0%`) โดยยังไม่ใช้อารมณ์แยกฉาก
+- prompt เขียนบทมีคำแนะนำเบาๆ เรื่องลำดับอารมณ์ (ฉากแรกมักเป็น curious/excited ฉากสุดท้ายมักเป็น warm/emphatic) และ log จะเตือนถ้าทุกฉากได้อารมณ์เดียวกัน
+- โหมดทดสอบเสียง `python scripts/2_generate_voice.py --test` สร้างแค่ 2 บท (ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกใกล้กลางคลิปที่สุด)
 
 ดูรายละเอียดการเปลี่ยนแปลง ข้อจำกัด และแผนทดสอบในหัวข้อ 11 ของ `PROJECT_SPEC.md`
