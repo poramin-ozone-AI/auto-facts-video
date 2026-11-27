@@ -12,7 +12,7 @@ auto-facts-video/
 ├── assets/
 │   └── .gitkeep
 ├── scripts/
-│   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ + มุมกล้อง + ตัวดึง IDENTITY LOCK
+│   ├── style.py                        # ข้อความคุมสไตล์ภาพสีน้ำ + มุมกล้อง + ตัวดึง IDENTITY LOCK (prompt ภาพ = ฉาก -> identity -> มุมกล้อง -> สไตล์ ไม่ส่งบทพากย์เข้าโมเดลภาพ)
 │   ├── 0_check_models.py               # ขั้น 0: เตือนถ้าชื่อโมเดล Gemini ที่ตั้งไว้ไม่อยู่ในรายการของ API (ไม่ทำให้ล้ม)
 │   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง; หมุนหมวดหัวข้อตามวัน)
 │   ├── 2_generate_voice.py             # ขั้น 2: เสียงพากย์ (Gemini TTS 3.8 -> edge-tts สำรองทั้งคลิป)
@@ -95,7 +95,7 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 **ข้อควรระวัง:** FLUX.2 klein 9B ใช้ Neurons สูงกว่า 4B มาก ควรตรวจยอด/โควตาก่อนรันทดสอบ
 
 
-## ความคงที่ของตัวละคร (IDENTITY LOCK) — v3.5
+## ความคงที่ของตัวละคร (IDENTITY LOCK)
 - ตัว/สัตว์/วัตถุที่ปรากฏซ้ำหลายฉากต้องมีบรรทัดแยกท้าย `image_prompt` รูปแบบ `IDENTITY LOCK: [A European robin (Erithacus rubecula), ...]` คัดลอกคำต่อคำทุกฉาก
 - `1_generate_script.py` ตรวจรูปแบบ ความชัดเจนของชื่อชนิด และความเหมือนกันของข้อความ ไม่ผ่านจะขอบทใหม่อัตโนมัติ
 - ภาพตัดขวาง/ภาพขยายใกล้ (`cross-section` / `close-up macro`) จะไม่ถูกใส่มุมกล้องจาก `SHOTS` ซ้ำ
