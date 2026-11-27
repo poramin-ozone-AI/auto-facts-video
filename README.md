@@ -15,7 +15,8 @@ auto-facts-video/
 │   ├── 1_generate_script.py            # ขั้น 1: สร้างบท JSON (Gemini หลายรุ่น -> Groq สำรอง; หมุนหมวดหัวข้อตามวัน)
 │   ├── 2_generate_voice.py             # ขั้น 2: เสียงพากย์ (Gemini TTS 3.8 -> edge-tts สำรองทั้งคลิป)
 │   ├── 3_generate_images.py            # ขั้น 3: ภาพ 9:16 สไตล์สีน้ำ (Cloudflare FLUX.2 klein -> FLUX.1 schnell -> Pollinations)
-│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งเข้ากลางภาพช้าๆ (1.00→1.05) + รวมเสียงเป็น output.mp4
+│   ├── 4_render_video.py               # ขั้น 4: ซูมภาพนิ่งเข้ากลางภาพช้าๆ (1.00→1.05) + เบิร์นซับ + รวมเสียงเป็น output.mp4 (--test = ตัวอย่าง 2 ฉาก)
+│   ├── subtitles.py                    # (v3.9) ตัดท่อนซับไทย + คำสำคัญสีเหลือง -> .ass / .srt
 │   ├── 5_save_history.py               # ขั้น 5: บันทึกหัวข้อที่ใช้แล้ว (ทำหลังคลิปสำเร็จเท่านั้น)
 │   └── compare_flux_models.py          # ทดสอบแยก FLUX.2 klein 4B เทียบ 9B (ไม่กระทบงานผลิต)
 ├── output/
@@ -58,6 +59,10 @@ auto-facts-video/
 | `AUDIO_TAIL_PAD` | `0.4` | เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที) ให้จังหวะไม่รีบ |
 | `SCRIPT_MIN_CHARS` / `SCRIPT_MAX_CHARS` | `520` / `1250` | ความยาวบทพากย์รวม (ตัวอักษร) ถ้าคลิปสั้นกว่า 35 วินาทีบ่อย ให้ขยับค่าต่ำสุดขึ้น |
 | `VOICE_DIRECTIONS_ENABLED` | ทั้ง 6 แบบ | อารมณ์เสียงรายฉากที่เปิดใช้ (คั่นด้วยจุลภาค) ตัดแบบที่ฟังแล้วไม่ต่างออกได้ `informative` เปิดอยู่เสมอ |
+| `IMAGE_DETAIL_LEVEL` | `rich` | (v3.8) ความละเอียดภาพ: `rich` = มีคน/ท่าทาง/ฉากหน้า-กลาง-หลัง/ของประกอบ/แสง, `standard` = ปานกลาง ใช้ถ้าภาพแน่นเกินหรือโมเดลทำตามไม่ครบ |
+| `SUBTITLES_ENABLED` / `SUBTITLE_KEYWORDS_ENABLED` | `1` / `1` | (v3.9) เปิด/ปิดซับเบิร์น / คำสำคัญสีเหลือง (ปิดอย่างหลังจะไม่ขอ keywords จาก AI) |
+| `SUBTITLE_FONT` / `SUBTITLE_FONT_SIZE` / `SUBTITLE_MAX_CHARS` | `Loma` / `54` / `22` | ฟอนต์ไทย (ติดตั้งจาก `fonts-thai-tlwg`) ขนาด และจำนวนตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว) |
+| `SUBTITLE_MARGIN_BOTTOM` / `SUBTITLE_HIGHLIGHT_COLOR` | `230` / `#FFD93B` | ระยะจากขอบล่าง (~18%) และสีคำสำคัญ |
 | `CF_IMAGE_MODEL` | `@cf/black-forest-labs/flux-2-klein-4b` | โมเดลภาพหลัก (สั่งขนาด 720×1280 ตรงๆ) |
 | `CF_IMAGE_FALLBACK_MODELS` | `@cf/black-forest-labs/flux-1-schnell` | โมเดลภาพสำรองบน Cloudflare |
 | `CF_IMAGE_STEPS` | `6` | จำนวนขั้นวาดภาพของ FLUX.1 schnell (1–8) ไม่มีผลกับ klein |
@@ -117,3 +122,27 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 - โหมดทดสอบเสียง `python scripts/2_generate_voice.py --test` สร้างแค่ 2 บท (ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกใกล้กลางคลิปที่สุด)
 
 ดูรายละเอียดการเปลี่ยนแปลง ข้อจำกัด และแผนทดสอบในหัวข้อ 11 ของ `PROJECT_SPEC.md`
+
+---
+
+## 6. Phase A v3.8 (ภาพละเอียดขึ้น)
+
+- แก้สาเหตุภาพโล่ง: prompt เขียนบทไม่สั่งให้มีคน/ฉากหน้า-หลัง/ของประกอบ และ `STYLE` มีคำว่า "avoid unnecessary clutter"
+- `image_prompt` ใหม่ 60–120 คำ (ระดับ `rich`): ประโยคแรกบอก ใคร ทำอะไร ที่ไหน, ต้องเห็นคนทำตาม narration จริง, แยกชั้นภาพ, ของประกอบ 2–3 อย่าง, แสงบรรยากาศ, ไอเดียเชิงสัญลักษณ์ 1 อย่าง, จุดโฟกัสเดียว, ไม่มีตัวหนังสือ
+- IDENTITY LOCK ใช้กับกลุ่มคนได้ (เช่น นักพายไวกิ้ง)
+- ปรับระดับด้วย `IMAGE_DETAIL_LEVEL` (`rich`/`standard`) ใน workflow ไม่ต้องแก้โค้ด
+- เพิ่มเพดานโทเคนคำตอบของ Gemini (`GEMINI_MAX_OUTPUT_TOKENS`, 16384) กัน JSON ถูกตัด
+- ยังไม่ได้ทดสอบกับ API จริง ให้รัน `test_mode` แล้วดูภาพ 2 ฉากและ `script.json` ก่อนรันเต็ม
+- รายละเอียดในหัวข้อ 12 ของ `PROJECT_SPEC.md`
+
+---
+
+## 7. Phase B v3.9 (ซับไตเติล)
+
+- ซับเบิร์นลงวิดีโอ **บรรทัดเดียว** ตัวหนาขาว ขอบดำ ไม่มีกล่องพื้น อยู่เหนือขอบล่าง ~18% (เลี่ยงปุ่มแพลตฟอร์ม) **คำสำคัญเป็นสีเหลือง** 1–2 คำต่อฉาก (AI เลือกตอนเขียนบท ต้องตรงกับ narration ตรงตัว ไม่ตรงจะถูกตัดทิ้ง)
+- ได้ไฟล์ `subtitles.srt` แยก (ไม่มีสี) ใน artifact ไว้อัปโหลดแยกหรือแก้เอง
+- ตัดคำไทยด้วย `pythainlp` เวลาแบ่งตามสัดส่วนตัวอักษรในแต่ละฉาก (ไม่ใช่ timestamp รายคำ จึงอาจเลื่อนจากเสียงเล็กน้อย)
+- `test_mode` เรนเดอร์ตัวอย่าง 2 ฉากพร้อมซับเป็น `test_output.mp4` ใน artifact `debug-or-test-…`
+- ปิดซับได้ด้วย `SUBTITLES_ENABLED: "0"` ปิดแค่สีเหลืองด้วย `SUBTITLE_KEYWORDS_ENABLED: "0"`
+- ยังไม่ได้ทดสอบบน GitHub runner จริง (ฟอนต์/pythainlp/จังหวะซับ) ให้รัน `test_mode` ก่อน
+- รายละเอียดในหัวข้อ 13 ของ `PROJECT_SPEC.md`
