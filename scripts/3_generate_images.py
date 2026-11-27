@@ -8,6 +8,7 @@
 
 หมายเหตุ: ถ้าบางฉากต้องใช้ตัวสำรอง สไตล์ภาพอาจต่างจากฉากอื่นเล็กน้อย (ดู log ฟิลด์ image_provider ใน script.json)
 
+โหมดทดสอบ: python scripts/3_generate_images.py --test   (สร้างแค่ 2 ฉาก คือฉากแรกกับฉากกลาง โดยไม่ทับ script.json)
 Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (ถ้าไม่มีจะข้าม Cloudflare ไปใช้ตัวสำรองเลย)
 ตัวแปร env ที่ปรับได้:
   - CF_IMAGE_MODEL            (ค่าเริ่มต้น: @cf/black-forest-labs/flux-2-klein-4b)
@@ -212,8 +213,11 @@ def main():
     if not script_path.exists():
         sys.exit("ไม่พบ output/script.json (ต้องรันขั้น 1 ก่อน)")
 
+    test = "--test" in sys.argv
     data = json.loads(script_path.read_text(encoding="utf-8"))
     scenes = data["scenes"]
+    if test:
+        scenes = [scenes[0]] if len(scenes) < 2 else [scenes[0], scenes[len(scenes) // 2]]
 
     providers = build_providers()
     dead: set = set()
@@ -234,8 +238,9 @@ def main():
     if "pollinations" in used:
         print("WARNING: มีภาพจาก Pollinations ซึ่งอาจมีลายน้ำ ตรวจภาพก่อนโพสต์")
 
-    script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("เสร็จขั้น 3")
+    if not test:
+        script_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("เสร็จขั้น 3" + (" (โหมดทดสอบ)" if test else ""))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@ Secrets: GEMINI_API_KEY (จำเป็น), GROQ_API_KEY (แนะนำเ�
   - GEMINI_MODEL            (ค่าเริ่มต้น: gemini-3.8-flash)
   - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-3.5-flash-lite  คั่นด้วยจุลภาค)
   - GROQ_MODEL              (ค่าเริ่มต้น: openai/gpt-oss-120b)
+  - SCRIPT_MIN_CHARS / SCRIPT_MAX_CHARS  (ค่าเริ่มต้น: 520 / 1250 ตัวอักษรของบทพากย์รวม)
+  - VOICE_DIRECTIONS_ENABLED (ค่าเริ่มต้น: curious,informative,excited,mysterious,emphatic,warm
+                              คั่นด้วยจุลภาค; ตัดบางอารมณ์ออกได้ informative จะอยู่เสมอ)
 
 หมายเหตุ: สคริปต์นี้ไม่บันทึกหัวข้อลง topics_history.txt อีกต่อไป
 ระบบจะบันทึกหลังเรนเดอร์คลิปสำเร็จแล้วเท่านั้น (scripts/5_save_history.py)
@@ -35,7 +38,8 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 # เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที -> 40-90 วิ ~ 520-1250 ตัวอักษร (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
 # (v3.5 เป็น 450-1400 ซึ่งหลุดช่วง 40-90 วินาทีได้ทั้งสองด้าน)
-MIN_CHARS, MAX_CHARS = 520, 1250
+MIN_CHARS = int(os.getenv("SCRIPT_MIN_CHARS", "520"))
+MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "1250"))
 MIN_SCENES, MAX_SCENES = 6, 12
 
 # หมวดหัวข้อประจำวัน (หมุนตามเลขวันของปี UTC) กันหัวข้อกลุ่มเดียวกันออกติดกันหลายวัน
@@ -56,7 +60,43 @@ def todays_category() -> str:
     return CATEGORIES[day % len(CATEGORIES)]
 
 
-VOICE_DIRECTIONS = {"curious", "informative", "excited", "mysterious", "emphatic", "warm"}
+ALL_VOICE_DIRECTIONS = ["curious", "informative", "excited", "mysterious", "emphatic", "warm"]
+VOICE_GUIDE = {
+    "curious": "ใช้ curious เมื่อชวนสงสัย",
+    "informative": "informative เมื่ออธิบายข้อเท็จจริง",
+    "excited": "excited เมื่อมีจุดน่าตื่นเต้น",
+    "mysterious": "mysterious เมื่อสร้างความพิศวง",
+    "emphatic": "emphatic เมื่อต้องเน้นประเด็นสำคัญ",
+    "warm": "warm เมื่อต้องการความอบอุ่น",
+}
+
+
+def enabled_voice_directions() -> list[str]:
+    """อารมณ์ที่เปิดใช้ (ปรับด้วย VOICE_DIRECTIONS_ENABLED) informative เปิดอยู่เสมอเพราะเป็นค่าสำรอง"""
+    raw = [x.strip().lower() for x in os.getenv("VOICE_DIRECTIONS_ENABLED", "").split(",") if x.strip()]
+    chosen = [d for d in ALL_VOICE_DIRECTIONS if d in raw] if raw else list(ALL_VOICE_DIRECTIONS)
+    if "informative" not in chosen:
+        chosen.append("informative")
+    return chosen
+
+
+ENABLED_DIRECTIONS = enabled_voice_directions()
+VOICE_DIRECTIONS = set(ENABLED_DIRECTIONS)
+
+
+def voice_prompt_lines() -> tuple[str, str, str]:
+    """คืน (รายการค่าที่เลือกได้, คำอธิบายการใช้, บรรทัดแนวทางลำดับอารมณ์ (อาจว่าง))"""
+    names = ", ".join(ENABLED_DIRECTIONS)
+    guide = ", ".join(VOICE_GUIDE[d] for d in ENABLED_DIRECTIONS)
+    opening = [d for d in ("curious", "excited") if d in VOICE_DIRECTIONS]
+    closing = [d for d in ("warm", "emphatic") if d in VOICE_DIRECTIONS]
+    arc = ""
+    if opening and closing:
+        arc = (
+            f"- แนวทางลำดับอารมณ์ (เป็นคำแนะนำเบาๆ ให้ยึดเนื้อหาจริงเป็นหลัก): ฉากแรกมักเป็น {' หรือ '.join(opening)} "
+            f"และฉากสุดท้ายมักเป็น {' หรือ '.join(closing)}\n"
+        )
+    return names, guide, arc
 
 
 PROMPT = """คุณเป็นนักเขียนบทคลิปสั้น "ความรู้แปลกๆ ที่คนส่วนใหญ่ไม่รู้" ภาษาไทย
@@ -69,9 +109,9 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - เลือกข้อเท็จจริงที่ตรวจสอบได้จริงทางวิทยาศาสตร์ ประวัติศาสตร์ ธรรมชาติ หรือจิตวิทยา ห้ามแต่งหรือเดา ถ้าไม่มั่นใจให้เลือกเรื่องอื่น
 - เปิดด้วยประโยคดึงความสนใจใน 1-2 ประโยคแรก และปิดด้วยประโยคสรุปสั้นๆ ที่น่าจดจำ
 - น้ำเสียงบทโดยรวมเป็นมิตร น่าเชื่อถือ และเล่าอย่างเป็นธรรมชาติ เหมาะกับคลิปความรู้สั้น
-- กำหนด voice_direction ให้ทุกฉากตามอารมณ์ของเนื้อหา เลือกได้เฉพาะ: curious, informative, excited, mysterious, emphatic, warm
-- ใช้ curious เมื่อชวนสงสัย, informative เมื่ออธิบายข้อเท็จจริง, excited เมื่อมีจุดน่าตื่นเต้น, mysterious เมื่อสร้างความพิศวง, emphatic เมื่อต้องเน้นประเด็นสำคัญ, warm เมื่อต้องการความอบอุ่น
-- อารมณ์ต้องพอดี ไม่เล่นใหญ่ และเปลี่ยนตามเนื้อหาแต่ละฉาก ไม่จำเป็นต้องเปลี่ยนอารมณ์ทุกฉาก
+- กำหนด voice_direction ให้ทุกฉากตามอารมณ์ของเนื้อหา เลือกได้เฉพาะ: {voice_names}
+- {voice_guide}
+{voice_arc}- อารมณ์ต้องพอดี ไม่เล่นใหญ่ และเปลี่ยนตามเนื้อหาแต่ละฉาก ไม่จำเป็นต้องเปลี่ยนอารมณ์ทุกฉาก
 - บทพากย์รวมกัน {min_c}-{max_c} ตัวอักษร แบ่งเป็น {min_s}-{max_s} ฉาก
 - แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียว ชัดเจน เป็นภาพแนวตั้ง (9:16)
 - ความหลากหลายของภาพ: เลือกสิ่งที่เหมาะกับ narration ของแต่ละฉากจริง ๆ ทั้งสัตว์ สิ่งของ บุคคล สถานที่ ธรรมชาติ ภูมิประเทศ และภาพตัดขวาง ไม่ใช้สัตว์หรือตัวละครเดิมเป็นภาพประกอบทุกฉากโดยไม่มีเหตุผล
@@ -87,7 +127,7 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป",
-  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "curious|informative|excited|mysterious|emphatic|warm", "image_prompt": "..."}}]}}"""
+  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}", "image_prompt": "..."}}]}}"""
 
 
 class NonRetryable(Exception):
@@ -229,6 +269,9 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
             direction = "informative"
         s["voice_direction"] = direction
         s["id"] = i
+    used_dirs = [s.get("voice_direction") for s in scenes if isinstance(s, dict) and s.get("voice_direction")]
+    if len(used_dirs) >= 4 and len(set(used_dirs)) == 1:
+        print(f"WARNING: ทุกฉากใช้อารมณ์เดียวกัน ({used_dirs[0]}) ตรวจว่าเหมาะกับเนื้อหาหรือไม่")
     errs.extend(check_identities(scenes))
     total = sum(len(str(s.get("narration", "")).strip()) for s in scenes if isinstance(s, dict))
     if not (MIN_CHARS <= total <= MAX_CHARS):
@@ -258,6 +301,10 @@ def main():
         min_s=MIN_SCENES,
         max_s=MAX_SCENES,
         category=todays_category(),
+        voice_names=voice_prompt_lines()[0],
+        voice_guide=voice_prompt_lines()[1],
+        voice_arc=voice_prompt_lines()[2],
+        voice_options="|".join(ENABLED_DIRECTIONS),
     )
     print(f"หมวดประจำวัน: {todays_category()}")
 

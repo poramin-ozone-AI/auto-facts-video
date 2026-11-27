@@ -16,9 +16,12 @@
   - GEMINI_VOICE     (ค่าเริ่มต้น: Orus; ตัวเลือกอื่น: Charon, Algenib, Schedar, Fenrir, Puck)
   - GEMINI_TTS_DELAY (ค่าเริ่มต้น: 31 วินาที)
   - EDGE_VOICE       (ค่าเริ่มต้น: th-TH-NiwatNeural)
-  - VOICE_RATE       (ค่าเริ่มต้น: -8%)
+  - VOICE_RATE       (ค่าเริ่มต้น: +0%  v3.7 ปรับจาก -8% ให้ใกล้จังหวะ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง)
   - VOICE_PITCH      (ค่าเริ่มต้น: -2Hz)
   - AUDIO_TAIL_PAD   (ค่าเริ่มต้น: 0.4 วินาที เว้นความเงียบท้ายแต่ละฉาก)
+โหมดทดสอบ: python scripts/2_generate_voice.py --test
+  (สร้างเสียงแค่ 2 ฉาก: ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกใกล้กลางคลิปที่สุด; ไม่ทับ script.json
+   ไม่ตรวจช่วงความยาวรวม; ใช้ผู้ให้บริการ/fallback ตามปกติ ดูบรรทัดสรุปว่าเป็น gemini หรือ edge)
   - voice_direction ในแต่ละ scene: curious / informative / excited / mysterious / emphatic / warm
     (ถ้า script.json รุ่นเก่าไม่มีฟิลด์นี้ จะใช้ informative)
 """
@@ -50,7 +53,7 @@ GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Orus")
 GEMINI_TTS_DELAY = float(os.getenv("GEMINI_TTS_DELAY", "31"))
 
 EDGE_VOICE = os.getenv("EDGE_VOICE", os.getenv("VOICE", "th-TH-NiwatNeural"))
-RATE = os.getenv("VOICE_RATE", "-8%")
+RATE = os.getenv("VOICE_RATE", "+0%")
 PITCH = os.getenv("VOICE_PITCH", "-2Hz")
 
 TAIL_PAD = float(os.getenv("AUDIO_TAIL_PAD", "0.4"))  # วินาที: เว้นความเงียบท้ายเสียงแต่ละฉาก ให้จังหวะไม่รีบ
@@ -251,6 +254,29 @@ def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str, voi
     raise RuntimeError(f"Gemini TTS ({model}) ล้มเหลวครบ 3 รอบสำหรับ {out_mp3.name}")
 
 
+def scene_direction(s: dict) -> str:
+    return str(s.get("voice_direction", "informative")).strip().lower() or "informative"
+
+
+def pick_test_scenes(scenes: list[dict]) -> list[dict]:
+    """เลือก 2 ฉากสำหรับทดสอบเสียง: ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกและอยู่ใกล้กลางคลิปที่สุด (ถ้าไม่มี ใช้ฉากกลาง)"""
+    if len(scenes) < 2:
+        return list(scenes)
+    first = scenes[0]
+    mid = len(scenes) // 2
+    for i in sorted(range(1, len(scenes)), key=lambda k: abs(k - mid)):
+        if scene_direction(scenes[i]) != scene_direction(first):
+            return [first, scenes[i]]
+    return [first, scenes[mid]]
+
+
+def report_pace(narration: str, dur: float):
+    """แสดงอัตราพูดโดยประมาณ (ตัวอักษรไม่รวมช่องว่าง / วินาทีเสียงจริงไม่รวมความเงียบท้าย) ไว้เทียบ v3.6 กับ v3.7"""
+    chars = len(re.sub(r"\s", "", narration))
+    speech = max(dur - TAIL_PAD, 0.1)
+    print(f"  อัตราพูดโดยประมาณ {chars / speech:.1f} ตัวอักษร/วินาที")
+
+
 def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
     global USED_TTS_MODEL
     clear_audio_dir()
@@ -258,7 +284,7 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
     active_model = None  # รุ่นที่ล็อกแล้วหลังฉากแรกสำเร็จ
     for idx, s in enumerate(scenes):
         p = AUD / f"scene_{s['id']:02d}.mp3"
-        direction = str(s.get("voice_direction", "informative")).strip().lower() or "informative"
+        direction = scene_direction(s)
         if direction not in VOICE_DIRECTION_STYLES:
             print(f"  WARNING: voice_direction '{direction}' ไม่รู้จัก -> ใช้ informative")
             direction = "informative"
@@ -281,6 +307,7 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
         if dur <= 0.3:
             raise RuntimeError(f"ความยาวเสียงฉาก {s['id']} สั้นผิดปกติ ({dur} วิ)")
         print(f"  -> {dur} วิ ({p.stat().st_size} bytes)")
+        report_pace(s["narration"], dur)
         results.append((p, dur))
         if idx < len(scenes) - 1 and GEMINI_TTS_DELAY > 0:
             print(f"  พัก {GEMINI_TTS_DELAY:.0f} วิ เพื่อรักษาระดับโควตาฟรี...")
@@ -314,6 +341,7 @@ async def generate_all_edge(scenes: list[dict]) -> list[tuple[pathlib.Path, floa
         if dur <= 0.3:
             raise RuntimeError(f"ความยาวเสียงฉาก {s['id']} สั้นผิดปกติ ({dur} วิ)")
         print(f"  -> {dur} วิ ({p.stat().st_size} bytes)")
+        report_pace(s["narration"], dur)
         results.append((p, dur))
     return results
 
@@ -325,6 +353,10 @@ def main():
 
     data = json.loads(script_path.read_text(encoding="utf-8"))
     scenes = data["scenes"]
+    test = "--test" in sys.argv
+    if test:
+        scenes = pick_test_scenes(scenes)
+        print(f"[โหมดทดสอบเสียง] ฉากที่ใช้: {[s['id'] for s in scenes]} | emotion: {[scene_direction(s) for s in scenes]}")
 
     provider_used = "gemini"
     try:
@@ -336,6 +368,12 @@ def main():
             results = asyncio.run(generate_all_edge(scenes))
         except Exception as e2:
             sys.exit(f"สร้างเสียงล้มเหลวทั้ง Gemini TTS และ edge-tts: {e2}")
+
+    if test:
+        for s, (p, dur) in zip(scenes, results):
+            print(f"  ทดสอบ: ฉาก {s['id']} ({scene_direction(s)}) -> {p} {dur} วิ")
+        print(f"เสร็จขั้น 2 (โหมดทดสอบ, {provider_used}) | ไม่ได้เขียนทับ script.json")
+        return
 
     total = 0.0
     for s, (p, dur) in zip(scenes, results):
