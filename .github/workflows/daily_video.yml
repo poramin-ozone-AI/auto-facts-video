@@ -3,7 +3,12 @@ name: daily-video
 on:
   schedule:
     - cron: "0 1 * * *"      # 01:00 UTC = 08:00 เวลาไทย (GitHub ใช้ UTC และอาจล่าช้า 5-30 นาที)
-  workflow_dispatch:          # กดรันเอง (รันเต็มทุกขั้นเหมือนรอบอัตโนมัติ)
+  workflow_dispatch:          # กดรันเองเพื่อทดสอบ
+    inputs:
+      test_mode:
+        description: "โหมดทดสอบ: เขียนบท + สร้างเสียง 2 บท + สร้างภาพ 2 ฉาก ข้ามการเรนเดอร์ (ไม่บันทึกหัวข้อ) เอาเครื่องหมายถูกออกเพื่อรันเต็ม"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -32,8 +37,11 @@ jobs:
       GEMINI_VOICE: "Orus"
       GEMINI_TTS_DELAY: "31"
       EDGE_VOICE: "th-TH-NiwatNeural"
-      VOICE_RATE: "-8%"
+      VOICE_RATE: "+0%"       # เสียงสำรอง edge-tts (v3.7 ปรับจาก -8% ให้ใกล้ Gemini ที่เร็วขึ้น ปรับได้หลังฟังจริง)
       VOICE_PITCH: "-2Hz"
+      SCRIPT_MIN_CHARS: "520"   # ความยาวบทพากย์รวมขั้นต่ำ/สูงสุด (ตัวอักษร) ถ้าคลิปสั้นเกินให้ขยับ MIN ขึ้น
+      SCRIPT_MAX_CHARS: "1250"
+      VOICE_DIRECTIONS_ENABLED: "curious,informative,excited,mysterious,emphatic,warm"   # ตัดอารมณ์ที่ฟังแล้วไม่ต่างออกได้
       AUDIO_TAIL_PAD: "0.4"   # เว้นความเงียบท้ายเสียงแต่ละฉาก (วินาที)
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
       CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
@@ -62,16 +70,27 @@ jobs:
         run: python scripts/1_generate_script.py
 
       - name: 2) Generate Voice
-        run: python scripts/2_generate_voice.py
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.test_mode }}" = "true" ]; then
+            python scripts/2_generate_voice.py --test
+          else
+            python scripts/2_generate_voice.py
+          fi
 
       - name: 3) Generate Images
-        run: python scripts/3_generate_images.py
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.test_mode }}" = "true" ]; then
+            python scripts/3_generate_images.py --test
+          else
+            python scripts/3_generate_images.py
+          fi
 
       - name: 4) Render Video
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true' }}
         run: python scripts/4_render_video.py
 
       - name: Upload final video & script artifact
-        if: ${{ success() }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: daily-video-${{ github.run_number }}
@@ -82,7 +101,7 @@ jobs:
 
       # บันทึกหัวข้อเฉพาะเมื่อคลิปเรนเดอร์สำเร็จและอัปโหลดแล้วเท่านั้น (รันล้มเหลว = หัวข้อไม่ถูกนับว่าใช้แล้ว)
       - name: 5) Save topic history to repository
-        if: ${{ success() }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test_mode != 'true') }}
         run: |
           python scripts/5_save_history.py
           git config user.name "github-actions[bot]"
@@ -94,11 +113,11 @@ jobs:
             git push
           fi
 
-      - name: Upload debug artifacts
-        if: ${{ failure() }}
+      - name: Upload test or debug artifacts
+        if: ${{ failure() || (github.event_name == 'workflow_dispatch' && github.event.inputs.test_mode == 'true') }}
         uses: actions/upload-artifact@v4
         with:
-          name: debug-${{ github.run_number }}
+          name: debug-or-test-${{ github.run_number }}
           path: |
             output/script.json
             output/audio/*.mp3
