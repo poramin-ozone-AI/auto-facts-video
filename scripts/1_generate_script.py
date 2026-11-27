@@ -56,6 +56,9 @@ def todays_category() -> str:
     return CATEGORIES[day % len(CATEGORIES)]
 
 
+VOICE_DIRECTIONS = {"curious", "informative", "excited", "mysterious", "emphatic", "warm"}
+
+
 PROMPT = """คุณเป็นนักเขียนบทคลิปสั้น "ความรู้แปลกๆ ที่คนส่วนใหญ่ไม่รู้" ภาษาไทย
 หัวข้อที่ใช้ไปแล้ว (ห้ามซ้ำหรือใกล้เคียง):
 {history}
@@ -65,7 +68,10 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 เงื่อนไข:
 - เลือกข้อเท็จจริงที่ตรวจสอบได้จริงทางวิทยาศาสตร์ ประวัติศาสตร์ ธรรมชาติ หรือจิตวิทยา ห้ามแต่งหรือเดา ถ้าไม่มั่นใจให้เลือกเรื่องอื่น
 - เปิดด้วยประโยคดึงความสนใจใน 1-2 ประโยคแรก และปิดด้วยประโยคสรุปสั้นๆ ที่น่าจดจำ
-- น้ำเสียงนุ่มนวล หนักแน่น น่าเชื่อถือ เหมาะกับการพากย์สารคดีสั้น
+- น้ำเสียงบทโดยรวมเป็นมิตร น่าเชื่อถือ และเล่าอย่างเป็นธรรมชาติ เหมาะกับคลิปความรู้สั้น
+- กำหนด voice_direction ให้ทุกฉากตามอารมณ์ของเนื้อหา เลือกได้เฉพาะ: curious, informative, excited, mysterious, emphatic, warm
+- ใช้ curious เมื่อชวนสงสัย, informative เมื่ออธิบายข้อเท็จจริง, excited เมื่อมีจุดน่าตื่นเต้น, mysterious เมื่อสร้างความพิศวง, emphatic เมื่อต้องเน้นประเด็นสำคัญ, warm เมื่อต้องการความอบอุ่น
+- อารมณ์ต้องพอดี ไม่เล่นใหญ่ และเปลี่ยนตามเนื้อหาแต่ละฉาก ไม่จำเป็นต้องเปลี่ยนอารมณ์ทุกฉาก
 - บทพากย์รวมกัน {min_c}-{max_c} ตัวอักษร แบ่งเป็น {min_s}-{max_s} ฉาก
 - แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียว ชัดเจน เป็นภาพแนวตั้ง (9:16)
 - ความหลากหลายของภาพ: เลือกสิ่งที่เหมาะกับ narration ของแต่ละฉากจริง ๆ ทั้งสัตว์ สิ่งของ บุคคล สถานที่ ธรรมชาติ ภูมิประเทศ และภาพตัดขวาง ไม่ใช้สัตว์หรือตัวละครเดิมเป็นภาพประกอบทุกฉากโดยไม่มีเหตุผล
@@ -81,7 +87,7 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป",
-  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "image_prompt": "..."}}]}}"""
+  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "curious|informative|excited|mysterious|emphatic|warm", "image_prompt": "..."}}]}}"""
 
 
 class NonRetryable(Exception):
@@ -216,6 +222,11 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
             errs.append(f"ฉาก {i}: narration ว่าง")
         if len(str(s.get("image_prompt", "")).strip()) < 15:
             errs.append(f"ฉาก {i}: image_prompt สั้นเกินไป")
+        direction = str(s.get("voice_direction", "")).strip().lower()
+        if direction not in VOICE_DIRECTIONS:
+            errs.append(f"ฉาก {i}: voice_direction ต้องเป็นหนึ่งใน {sorted(VOICE_DIRECTIONS)}")
+        else:
+            s["voice_direction"] = direction
         s["id"] = i
     errs.extend(check_identities(scenes))
     total = sum(len(str(s.get("narration", "")).strip()) for s in scenes if isinstance(s, dict))

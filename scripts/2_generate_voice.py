@@ -19,6 +19,8 @@
   - VOICE_RATE       (ค่าเริ่มต้น: -8%)
   - VOICE_PITCH      (ค่าเริ่มต้น: -2Hz)
   - AUDIO_TAIL_PAD   (ค่าเริ่มต้น: 0.4 วินาที เว้นความเงียบท้ายแต่ละฉาก)
+  - voice_direction ในแต่ละ scene: curious / informative / excited / mysterious / emphatic / warm
+    (ถ้า script.json รุ่นเก่าไม่มีฟิลด์นี้ จะใช้ informative)
 """
 import asyncio
 import base64
@@ -157,18 +159,40 @@ class ModelUnavailable(Exception):
     """รุ่นนี้ใช้ไม่ได้ (ไม่มีสิทธิ์/ไม่พบรุ่น) ลองซ้ำไม่ช่วย"""
 
 
-TTS_STYLE_EN = (
-    "A calm, warm, firm male documentary narrator. Unhurried pace, clear Thai pronunciation, trustworthy tone."
+TTS_BASE_STYLE_EN = (
+    "A friendly, warm and credible male narrator for short-form factual documentaries. "
+    "Use natural, conversational Thai with clear articulation and expressive but balanced delivery. "
+    "Speak at a moderately brisk pace, aiming roughly 8-10 percent faster than an unhurried documentary read, "
+    "while keeping every word clear and preserving natural pauses. "
+    "Sound engaging and human, never robotic, flat, rushed, theatrical or exaggerated."
 )
 
+VOICE_DIRECTION_STYLES = {
+    "curious": "Scene emotion: curious and inviting. Add a light sense of wonder and anticipation, as if revealing an intriguing fact.",
+    "informative": "Scene emotion: clear and informative. Prioritize calm confidence, precise explanation and easy comprehension.",
+    "excited": "Scene emotion: pleasantly excited. Add lively energy and brighter emphasis, but do not shout or overact.",
+    "mysterious": "Scene emotion: subtly mysterious. Use restrained suspense and intrigue without becoming dark or frightening.",
+    "emphatic": "Scene emotion: emphatic. Give the key idea deliberate stress and a confident finish without sounding aggressive.",
+    "warm": "Scene emotion: warm and reassuring. Use gentle friendliness and a human, inviting tone."
+}
 
-def build_tts_payload(model: str, narration: str) -> dict:
+
+def build_tts_style(voice_direction: str = "informative") -> str:
+    """รวมบุคลิกเสียงหลักกับอารมณ์เฉพาะฉาก; รองรับ script.json รุ่นเก่าที่ไม่มี voice_direction"""
+    direction = str(voice_direction or "informative").strip().lower()
+    if direction not in VOICE_DIRECTION_STYLES:
+        direction = "informative"
+    return f"{TTS_BASE_STYLE_EN} {VOICE_DIRECTION_STYLES[direction]}"
+
+
+def build_tts_payload(model: str, narration: str, voice_direction: str = "informative") -> dict:
     """รุ่น 3.8 ขึ้นไป: text = บทพากย์เป๊ะๆ (โมเดลอ่านทุกคำ) ส่วนน้ำเสียงใส่ใน speech_metadata.style
-    (v3.6: ตัดสาขารุ่น preview เดิมออกแล้ว เพราะรุ่น preview ปิดบริการไปแล้ว 17 พ.ย. 2026)"""
+    หาก script.json เก่าไม่มี voice_direction จะใช้ informative โดยอัตโนมัติ"""
     text = narration.strip()
+    style = build_tts_style(voice_direction)
     return {
         "contents": [
-            {"role": "user", "parts": [{"text": text, "speech_metadata": {"style": TTS_STYLE_EN}}]}
+            {"role": "user", "parts": [{"text": text, "speech_metadata": {"style": style}}]}
         ],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
@@ -177,13 +201,13 @@ def build_tts_payload(model: str, narration: str) -> dict:
     }
 
 
-def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str):
+def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str, voice_direction: str = "informative"):
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ไม่มี GEMINI_API_KEY")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = build_tts_payload(model, narration)
+    payload = build_tts_payload(model, narration, voice_direction)
 
     for attempt in range(1, 4):
         try:
@@ -234,12 +258,16 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
     active_model = None  # รุ่นที่ล็อกแล้วหลังฉากแรกสำเร็จ
     for idx, s in enumerate(scenes):
         p = AUD / f"scene_{s['id']:02d}.mp3"
-        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)}...")
+        direction = str(s.get("voice_direction", "informative")).strip().lower() or "informative"
+        if direction not in VOICE_DIRECTION_STYLES:
+            print(f"  WARNING: voice_direction '{direction}' ไม่รู้จัก -> ใช้ informative")
+            direction = "informative"
+        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)} | emotion={direction}...")
         candidates = [active_model] if active_model else GEMINI_TTS_MODELS
         last_err = None
         for model in candidates:
             try:
-                call_gemini_tts_scene(s["narration"], p, model)
+                call_gemini_tts_scene(s["narration"], p, model, direction)
                 active_model = model
                 last_err = None
                 break
