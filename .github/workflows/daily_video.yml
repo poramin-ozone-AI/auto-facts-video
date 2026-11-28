@@ -47,10 +47,10 @@ jobs:
       AUDIO_TAIL_PAD: "0.2"
       WHISPER_MODEL: "tiny"   # faster-whisper CPU int8
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
-      CF_IMAGE_FALLBACK_MODELS: "@cf/black-forest-labs/flux-1-schnell"
-      CF_IMAGE_STEPS: "6"
+      IMAGE_MAX_ATTEMPTS: "5"           # v4.4: ไม่มีโมเดลสำรอง Klein ล้มเหลวจริง = รันนั้นล้ม จึง retry หลายรอบ (error ทั่วไปต่อฉาก)
+      IMAGE_RATE_LIMIT_RETRIES: "4"     # จำนวนครั้งที่รอแล้วลองใหม่เมื่อเจอ 429
+      IMAGE_RATE_LIMIT_WAIT: "60"       # วินาทีรอ 429 ครั้งแรก (ครั้งถัดไปรอ 2x, 3x, ... สูงสุด 300)
       IMAGE_DETAIL_LEVEL: "rich"   # v3.8: rich = ภาพละเอียด มีคน/ฉากหน้า-หลัง/ของประกอบ, standard = ปานกลาง (ใช้ถ้าภาพแน่นเกินหรือโมเดลทำตาม prompt ไม่ครบ)
-      ENABLE_POLLINATIONS: "1"
       SUBTITLES_ENABLED: "1"            # v3.9: ซับเบิร์นลงวิดีโอ + output/subtitles.srt (0 = ปิด)
       SUBTITLE_KEYWORDS_ENABLED: "1"    # คำสำคัญสีเหลือง (0 = ซับขาวล้วน และไม่ขอ keywords จาก AI)
       SUBTITLE_FONT: "Loma"             # ฟอนต์ไทย (ติดตั้งจาก fonts-thai-tlwg ในขั้นติดตั้ง)
