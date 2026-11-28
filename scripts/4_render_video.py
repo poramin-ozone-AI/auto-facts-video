@@ -68,6 +68,16 @@ def normalize_audio_two_pass(concat_list: pathlib.Path, output_path: pathlib.Pat
     ], check=True)
 
 
+def validate_subtitle_paths(scenes: list[dict], ass_paths: dict[int, pathlib.Path]) -> None:
+    """ซับต้องมีไฟล์ครบทุกฉาก มิฉะนั้นให้ fallback ทั้งคลิปเป็นไม่มีซับ"""
+    expected_ids = {int(scene["id"]) for scene in scenes}
+    actual_ids = {int(scene_id) for scene_id in ass_paths}
+    if actual_ids != expected_ids:
+        raise RuntimeError(
+            f"ไฟล์ซับไม่ครบทุกฉาก (มี {sorted(actual_ids)} แต่ต้องมี {sorted(expected_ids)})"
+        )
+
+
 def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: pathlib.Path = None):
     img_path = pathlib.Path(scene["image"])
     aud_path = pathlib.Path(scene["audio"])
@@ -98,7 +108,7 @@ def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: 
             run(f"{base_vf},ass=filename='{ass_path.as_posix()}',format=yuv420p")
             return
         except subprocess.CalledProcessError as e:
-            print(f"WARNING: เบิร์นซับฉาก {scene['id']} ไม่สำเร็จ ({e}) -> เรนเดอร์ฉากนี้โดยไม่มีซับ")
+            raise RuntimeError(f"เบิร์นซับฉาก {scene['id']} ไม่สำเร็จ") from e
     run(f"{base_vf},format=yuv420p")
 
 
@@ -127,24 +137,47 @@ def main():
     final_mp4 = TEST_MP4 if test else FINAL_MP4
     for f in TMP.glob("*.mp4"):
         f.unlink()
-    # ซับ: ล้มเหลวตรงไหนก็เรนเดอร์ต่อโดยไม่มีซับ ไม่ให้ทั้งคลิปล้ม
+    # ซับเป็น all-or-nothing: ถ้าสร้างหรือเบิร์นซับส่วนใดไม่สำเร็จ ให้เรนเดอร์ทั้งคลิปใหม่โดยไม่มีซับ
     ass_paths = {}
+    def clear_subtitle_outputs() -> None:
+        for f in SUBS_DIR.glob("*.ass"):
+            f.unlink(missing_ok=True)
+        SRT_PATH.unlink(missing_ok=True)
+
     if subtitles.ENABLED:
         try:
-            for f in SUBS_DIR.glob("*.ass"):
-                f.unlink()
+            clear_subtitle_outputs()
             ass_paths = subtitles.build_subtitles(scenes, SUBS_DIR, SRT_PATH)
+            validate_subtitle_paths(scenes, ass_paths)
         except Exception as e:
-            print(f"WARNING: สร้างซับไม่สำเร็จ ({type(e).__name__}: {e}) -> เรนเดอร์โดยไม่มีซับ")
+            print(f"WARNING: สร้างซับไม่สำเร็จ ({type(e).__name__}: {e}) -> เรนเดอร์ทั้งคลิปโดยไม่มีซับ")
             ass_paths = {}
+            clear_subtitle_outputs()
     else:
+        clear_subtitle_outputs()
         print("ซับปิดอยู่ (SUBTITLES_ENABLED=0)")
-    clip_paths = []
-    for idx, scene in enumerate(scenes):
-        clip = TMP / f"clip_{scene['id']:02d}.mp4"
-        print(f"เรนเดอร์ฉาก {scene['id']}/{len(scenes)} ({scene['duration']} วิ)...")
-        render_scene_clip(scene, idx, clip, ass_paths.get(int(scene["id"])))
-        clip_paths.append(clip)
+    clip_paths = [TMP / f"clip_{scene['id']:02d}.mp4" for scene in scenes]
+
+    def render_all(use_subtitles: bool) -> None:
+        for clip in clip_paths:
+            clip.unlink(missing_ok=True)
+        for idx, (scene, clip) in enumerate(zip(scenes, clip_paths), 1):
+            print(f"เรนเดอร์ฉาก {scene['id']}/{len(scenes)} ({scene['duration']} วิ)...")
+            render_scene_clip(
+                scene, idx - 1, clip,
+                ass_paths.get(int(scene["id"])) if use_subtitles else None,
+            )
+
+    if ass_paths:
+        try:
+            render_all(use_subtitles=True)
+        except RuntimeError as e:
+            print(f"WARNING: {e} -> ยกเลิกซับทั้งคลิปและเรนเดอร์ใหม่ทุกฉากโดยไม่มีซับ")
+            ass_paths = {}
+            clear_subtitle_outputs()
+            render_all(use_subtitles=False)
+    else:
+        render_all(use_subtitles=False)
     concat_list = TMP / "concat.txt"
     concat_list.write_text("\n".join(f"file '{p.resolve()}'" for p in clip_paths) + "\n", encoding="utf-8")
     print(f"รวมทุกฉากเป็น {final_mp4}...")

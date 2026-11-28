@@ -47,8 +47,8 @@ _STYLE_NONLIVING = (
     "clean and simple. "
 )
 _DEPTH = {
-    "rich": "Layered depth, one clear focal point. ",
-    "standard": "One clear focal point, setting fills the canvas. ",
+    "rich": "Use visual depth when it helps the scene; keep one clear focal point. ",
+    "standard": "Simple composition with one clear focal point; setting fills the canvas. ",
 }
 _STYLE_TAIL = "Soft light. "
 
@@ -75,23 +75,23 @@ STYLE = style_for(False)  # เก็บไว้เพื่อความเ�
 # v4.4: แยกเป็น 2 ชุด ชุดไม่มีสิ่งมีชีวิตไม่มีคำว่า "characters" และ "eye" (กันโมเดลวาดตัวละคร/ตาในฉากวัตถุ)
 SHOTS_LIVING = [
     "Use a medium shot that shows the characters' poses together with their surroundings.",
-    "Use a wide establishing composition with clear foreground, middle ground and background.",
+    "Use a wide establishing composition when it suits the subject.",
     "Use a low-angle viewpoint when appropriate.",
     "Use a bird's-eye viewpoint when appropriate.",
     "Use a side/profile viewpoint when appropriate.",
     "Use a detailed close-up when the subject benefits from it.",
     "Use an over-the-shoulder or three-quarter viewpoint when appropriate.",
-    "Use a balanced environmental composition with layered depth.",
+    "Use a balanced environmental composition when useful.",
 ]
 SHOTS_NONLIVING = [
     "Use a medium shot that shows the main subject together with its surroundings.",
-    "Use a wide establishing composition with clear foreground, middle ground and background.",
+    "Use a wide establishing composition when it suits the subject.",
     "Use a low-angle viewpoint when appropriate.",
     "Use a high top-down overhead viewpoint when appropriate.",  # ไม่ใช้คำว่า bird's-eye (มีคำว่า eye)
     "Use a side/profile viewpoint when appropriate.",
     "Use a detailed close-up when the subject benefits from it.",
     "Use a three-quarter viewpoint when appropriate.",
-    "Use a balanced environmental composition with layered depth.",
+    "Use a balanced environmental composition when useful.",
 ]
 SHOTS = SHOTS_LIVING  # เก็บไว้เพื่อความเข้ากันได้กับโค้ดที่ import SHOTS
 
@@ -211,12 +211,12 @@ def scene_characters(scene: dict) -> list[str]:
     return normalize_characters(scene.get("characters"))
 
 
+# v4.9: ตัด right_edge (ปุ่มไลก์/คอมเมนต์ของแพลตฟอร์มอยู่ขอบขวา)
 # v4.8: ตำแหน่งตัวละครต่อฉาก (ให้ FLUX วาดเอง แก้ที่พรอมต์) ห้ามมุมขวาล่างเพราะเป็นที่ของปุ่มแพลตฟอร์ม
 # ขอบล่างเว้นไว้สำหรับซับไตเติล ตำแหน่งขอบอนุญาตให้ตัวละครโผล่ครึ่งตัว/ถูกเฟรมตัดได้ แต่ต้องเห็นจุดเด่นของตัวละคร
 PLACEMENTS = {
     "hero_center": "Hero framing: the characters are large, close to the camera and centered, faces clearly visible",
     "left_edge": "Place the characters at the left edge of the frame in the upper or middle area, partly cropped by the frame edge when natural",
-    "right_edge": "Place the characters at the right edge of the frame in the upper or middle area, partly cropped by the frame edge when natural",
     "top_peek": "The characters peek in from the top edge, upper half visible and cropped by the frame, with faces visible",
     "bottom_left": "Place the characters small in the lower-left, above the bottom quarter, partly tucked behind a scene element when natural",
 }

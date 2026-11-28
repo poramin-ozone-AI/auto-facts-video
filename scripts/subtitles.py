@@ -1,9 +1,8 @@
 """ซับไตเติลไทย (v3.9): ซอย narration เป็นท่อนสั้นบรรทัดเดียว + ไฮไลต์คำสำคัญสีเหลือง -> .ass (เบิร์นลงวิดีโอ) และ .srt (แยก)
 
 หลักการ
-  - TTS ไม่ให้ timestamp ระดับคำ: ถ้ามี faster-whisper จะใช้เวลา word/segment จากไฟล์เสียงมากำหนดจังหวะท่อนซับ (ข้อความยังเป็น narration ต้นฉบับ)
-    ถ้าใช้ Whisper ไม่ได้ จึงแบ่งเวลาของแต่ละฉากตามสัดส่วนจำนวนตัวอักษรของแต่ละท่อน
-    (ความคลาดเคลื่อนไม่สะสมข้ามฉาก เพราะเวลาเริ่ม/ยาวของฉากมาจากไฟล์เสียงจริง)
+  - TTS ไม่ให้ timestamp ระดับคำ: v4.9 แบ่งเวลาของแต่ละฉากตามสัดส่วนจำนวนตัวอักษรของแต่ละท่อนเท่านั้น (ตัด faster-whisper ออก)
+    ความคลาดเคลื่อนไม่สะสมข้ามฉาก เพราะเวลาเริ่ม/ยาวของฉากมาจากไฟล์เสียงจริง
   - ตัดคำไทยด้วย pythainlp (newmm) ถ้าไม่มี/ใช้ไม่ได้ จะตัดที่ช่องว่าง/เครื่องหมายวรรคตอนเท่านั้น และบังคับตัดตามความยาวแบบไม่รู้ขอบคำ (พิมพ์ WARNING)
   - คำสำคัญ (scene["keywords"]) ถูกถือเป็นก้อนเดียว ไม่ถูกตัดขาดกลางคำ
 
@@ -195,74 +194,9 @@ def proportional_scene_cues(scene: dict, duration: float = None) -> list[tuple[f
     return [(a, b, c) for a, b, c in cues]
 
 
-_WHISPER_MODEL = None
-_WHISPER_FAILED = False
-
 def scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, str]]:
-    """ใช้เวลา segment จาก faster-whisper แล้วกระจายข้อความต้นฉบับลงในช่วงเสียง; fallback เป็นสัดส่วนเดิมเมื่อโมเดลใช้ไม่ได้"""
-    global _WHISPER_MODEL, _WHISPER_FAILED
-    duration = float(duration if duration is not None else scene["duration"])
-    fallback = proportional_scene_cues(scene, duration)
-    audio = scene.get("audio")
-    if not audio or not pathlib.Path(audio).exists() or _WHISPER_FAILED:
-        return fallback
-    try:
-        if _WHISPER_MODEL is None:
-            from faster_whisper import WhisperModel
-            model_name = os.getenv("WHISPER_MODEL", "tiny")
-            _WHISPER_MODEL = WhisperModel(model_name, device="cpu", compute_type="int8")
-            print(f"โหลด faster-whisper {model_name} (CPU int8)")
-        segments, _ = _WHISPER_MODEL.transcribe(str(audio), language="th", word_timestamps=True, vad_filter=True)
-        segments = list(segments)
-        word_spans = []
-        segment_spans = []
-        for segment in segments:
-            sa, sb = float(segment.start), float(segment.end)
-            if sb > sa and str(segment.text).strip():
-                segment_spans.append((max(0.0,sa), min(duration,sb), str(segment.text).strip()))
-            for word in (getattr(segment, "words", None) or []):
-                wa, wb = float(word.start or 0.0), float(word.end or 0.0)
-                wt = str(word.word or "").strip()
-                if wt and wb > wa:
-                    word_spans.append((max(0.0,wa), min(duration,wb), wt))
-        # Prefer word timestamps when the model returns them; otherwise use segment timestamps.
-        spans = [(a,b,t) for a,b,t in (word_spans or segment_spans) if t and b>a]
-        if not spans:
-            return fallback
-        # Map cumulative character positions in the original narration onto Whisper segment intervals.
-        # This preserves the exact original Thai wording while using ASR-derived timing boundaries.
-        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k, str)] if KEYWORDS_ENABLED else [])
-        if not chunks:
-            return []
-        weights = [max(1, len(re.sub(r"\s", "", t))) for _,_,t in spans]
-        total_asr = float(sum(weights))
-        total_src = float(sum(max(1, len(re.sub(r"\s", "", t))) for t,_ in chunks))
-        def time_at(progress: float) -> float:
-            target = min(total_asr, max(0.0, progress * total_asr))
-            acc = 0.0
-            for (a,b,_), weight in zip(spans, weights):
-                if target <= acc + weight:
-                    frac = min(1.0, max(0.0, (target-acc)/weight))
-                    return a + (b-a)*frac
-                acc += weight
-            return spans[-1][1]
-        out=[]; cursor=0.0
-        for text, _ in chunks:
-            weight=max(1,len(re.sub(r"\s", "", text)))
-            start=time_at(cursor/total_src)
-            cursor += weight
-            end=time_at(cursor/total_src)
-            if end-start < 0.08:
-                end=min(duration,start+0.18)
-            if end>start:
-                out.append((max(0.0,start),min(duration,end),text))
-        if not out:
-            return fallback
-        return out
-    except Exception as e:
-        _WHISPER_FAILED = True
-        print(f"WARNING: faster-whisper ใช้ไม่ได้ ({type(e).__name__}: {e}) -> ใช้ timing แบบเดิม")
-        return fallback
+    """(v4.9) แบ่งเวลาซับตามสัดส่วนจำนวนตัวอักษรของแต่ละท่อน (ไม่ใช้ Whisper แล้ว)"""
+    return proportional_scene_cues(scene, duration)
 
 
 # ---------- เขียนไฟล์ ----------

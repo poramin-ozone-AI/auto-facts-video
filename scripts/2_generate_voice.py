@@ -161,14 +161,11 @@ class ModelUnavailable(Exception):
 
 
 TTS_BASE_STYLE_EN = (
-    "You are the same warm, deep, credible male documentary storyteller throughout the entire video. "
-    "Keep a stable vocal identity, timbre, accent, microphone distance and baseline speaking pace. "
-    "Speak natural Thai with clear articulation and human conversational phrasing. "
-    "Prioritize truthfulness, restraint and listener comprehension over theatrical performance. "
-    "Do not sound like an actor performing a role; do not exaggerate, shout, whisper dramatically, "
-    "or force emotion where the words do not support it. Do not add, omit, paraphrase or reorder words. "
-    "Do not change speaking speed merely to create emotion. Use pauses, emphasis, vocal weight and "
-    "intonation only where they naturally clarify the meaning."
+    "You are the same warm, deep, credible male documentary storyteller throughout the video. Preserve Orus's identity, "
+    "timbre, Thai accent, microphone distance and baseline pace. Speak natural Thai with clear articulation and "
+    "conversational phrasing. Stay truthful and restrained. Do not sound like an actor performing a role; do not exaggerate, shout, or whisper dramatically. "
+    "Speak the narration verbatim; never add, omit, paraphrase, or reorder words. "
+    "Use natural pauses, emphasis and intonation only to clarify meaning; do not alter speed just to create emotion."
 )
 
 
@@ -197,7 +194,6 @@ def build_tts_style(
         "A surprising fact should sound quietly revealing rather than excited or shouted. "
         "Serious or painful material deserves respectful restraint. Keep uncertainty explicit: "
         "a possibility, estimate, allegation or hypothesis must never sound like a confirmed fact. "
-        "Maintain the same recognizable Orus voice and baseline pace while varying only subtle delivery. "
         f"{context_text}"
     )
 
