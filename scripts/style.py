@@ -3,6 +3,14 @@ import re
 
 """Style and scene prompt builder for storybook watercolor illustrations.
 
+v4.7: ตัวละครประจำคลิป 2 ตัว (OZONE เด็กชายนักสำรวจ + ORBI หุ่นยนต์ลอยตัวคู่ใจ)
+  - รูปลักษณ์มาจาก "ภาพอ้างอิง" (assets/characters/*.png ส่งเข้า FLUX.2 klein ผ่าน input_image_N) + ข้อความอธิบายสั้นๆ ใน CHARACTERS
+    AI เขียนบทไม่ต้องบรรยายหน้าตา/ชุดของตัวละคร เขียนเฉพาะท่าทาง สีหน้า และตำแหน่งตามเนื้อหา (ระบบใส่รูปลักษณ์ให้เอง)
+  - ฟิลด์ characters ต่อฉาก = ["ozone","robot"] (ว่าง = ไม่มีตัวละคร ไม่ส่งภาพอ้างอิง) ฉากที่มีตัวละครถือเป็น has_living = true เสมอ
+  - ลำดับภาพอ้างอิงที่ส่ง = ลำดับใน CHARACTERS (ozone ก่อน robot) และประโยคใน prompt อ้างว่า "first/second attached image"
+    ตามภาพที่ส่งจริงของฉากนั้น (ไม่ผูกกับเลข 0/1 ของ input_image_N)
+  - ปิดทั้งระบบด้วย CHARACTERS_ENABLED=0
+
 v4.4: ใช้สไตล์ฐานชุดเดียวทุกฉาก (สีน้ำนิทาน โทนพาสเทล รูปทรงกลมมน เรียบง่าย แสงนุ่ม) ฉากทุกฉากจึงดูเป็นภาพชุดเดียวกัน
   - สิ่งมีชีวิต = kawaii chibi (มีหน้าตา) ตามเดิม
   - สิ่งไม่มีชีวิต = น่ารักจาก "รูปทรงและสี" (ทรงกลมมนนุ่มคล้ายตุ๊กตา พาสเทล ประกายแสงเล็กๆ) ไม่เอ่ยถึงตา/ปาก/แก้ม/แขนขาเลย
@@ -150,10 +158,102 @@ def coerce_bool(value):
 
 def scene_has_living(scene: dict) -> bool:
     """ประเภทฉาก: ใช้ has_living ที่ AI ระบุ ถ้าไม่มี/ไม่ถูกต้องใช้การมี IDENTITY LOCK เป็นตัวสำรอง"""
+    if scene_characters(scene):
+        return True  # v4.7: ฉากที่มีตัวละครประจำถือเป็นฉากมีชีวิตเสมอ
     flag = coerce_bool(scene.get("has_living"))
     if flag is not None:
         return flag
     return bool(extract_identities(scene.get("image_prompt", "")))
+
+
+# ---------------------------------------------------------------------------
+# v4.7: ตัวละครประจำคลิป
+# ---------------------------------------------------------------------------
+CHARACTERS_ENABLED = os.getenv("CHARACTERS_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# ลำดับในดิกต์นี้ = ลำดับภาพอ้างอิงที่ส่งให้โมเดล (ozone ก่อน robot)
+# name = ชื่อที่ AI ต้องเรียกใน image_prompt (ORBI เป็นชื่อชั่วคราว เปลี่ยนได้ที่นี่ที่เดียว)
+# desc = คำอธิบายสั้นๆ ช่วยโมเดลจับตัวตน (ภาพอ้างอิงเป็นตัวบอกรูปลักษณ์หลัก จึงไม่ต้องยาว)
+CHARACTERS = {
+    "ozone": {
+        "name": "OZONE",
+        "ref": "assets/characters/ozone.png",
+        "desc": "a chibi boy with silver-white hair fading to mint green and a white and green space jacket",
+    },
+    "robot": {
+        "name": "ORBI",
+        "ref": "assets/characters/robot.png",
+        "desc": "a small round white floating robot with a black screen face and green glowing details",
+    },
+}
+
+
+def raw_character_items(value) -> list[str]:
+    """แปลงค่าฟิลด์ characters (ลิสต์หรือสตริงคั่นจุลภาค) เป็นลิสต์ข้อความตัวพิมพ์เล็ก (ยังไม่กรองรหัสที่ไม่รู้จัก)"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [v for v in re.split(r"[,\s]+", value) if v]
+    if not isinstance(value, (list, tuple)):
+        return [str(value).strip().lower()]
+    return [str(v).strip().lower() for v in value if str(v).strip()]
+
+
+def normalize_characters(value) -> list[str]:
+    """รหัสตัวละครที่ถูกต้อง เรียงตาม CHARACTERS ไม่ซ้ำ; ปิดระบบ = ลิสต์ว่าง"""
+    if not CHARACTERS_ENABLED:
+        return []
+    items = set(raw_character_items(value))
+    return [cid for cid in CHARACTERS if cid in items]
+
+
+def scene_characters(scene: dict) -> list[str]:
+    return normalize_characters(scene.get("characters"))
+
+
+# v4.8: ตำแหน่งตัวละครต่อฉาก (ให้ FLUX วาดเอง แก้ที่พรอมต์) ห้ามมุมขวาล่างเพราะเป็นที่ของปุ่มแพลตฟอร์ม
+# ขอบล่างเว้นไว้สำหรับซับไตเติล ตำแหน่งขอบอนุญาตให้ตัวละครโผล่ครึ่งตัว/ถูกเฟรมตัดได้ แต่ต้องเห็นจุดเด่นของตัวละคร
+PLACEMENTS = {
+    "hero_center": "Hero framing: the characters are large, close to the camera and centered, faces clearly visible",
+    "left_edge": "Place the characters at the left edge of the frame in the upper or middle area, partly cropped by the frame edge when natural",
+    "right_edge": "Place the characters at the right edge of the frame in the upper or middle area, partly cropped by the frame edge when natural",
+    "top_peek": "The characters peek in from the top edge, upper half visible and cropped by the frame, with faces visible",
+    "bottom_left": "Place the characters small in the lower-left, above the bottom quarter, partly tucked behind a scene element when natural",
+}
+PLACEMENT_ORDER = list(PLACEMENTS)  # hero_center ใช้เฉพาะฉากฮุก (ฉากที่ 1)
+NEVER_ZONE = "never in the bottom-right corner, keep the bottom quarter uncluttered"
+# คำที่ห้ามอยู่ใน image_prompt ของฉากที่มีตัวละคร (มุมขวาล่าง)
+BOTTOM_RIGHT_RE = re.compile(
+    r"\b(?:bottom|lower)[\s-]*right\b|\bright[\s-]*(?:bottom|lower)\b|\bbottom[\s-]*right[\s-]*corner\b", re.I)
+
+
+def normalize_placement(value, scene_id: int = 1) -> str:
+    """รหัสตำแหน่งที่ถูกต้อง; ไม่ถูกต้อง/ไม่มี -> ค่าสำรองตามเลขฉาก (ฉาก 1 = hero_center, ฉากอื่นหมุนเวียนตำแหน่งขอบ)"""
+    v = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if v in PLACEMENTS and (v != "hero_center" or int(scene_id) == 1):
+        return v
+    if int(scene_id) == 1:
+        return "hero_center"
+    edge = PLACEMENT_ORDER[1:]
+    return edge[(int(scene_id) - 2) % len(edge)]
+
+
+def character_instruction(ids: list[str], placement: str = "hero_center") -> str:
+    """ประโยคกำกับให้โมเดลใช้ตัวละครจากภาพอ้างอิงที่แนบ (เรียงตาม ids ตรงกับลำดับภาพที่ส่งจริง)"""
+    if not ids:
+        return ""
+    ordinals = ["first", "second", "third", "fourth"]
+    parts = [
+        f"the {ordinals[i]} attached reference image shows {CHARACTERS[cid]['name']}, {CHARACTERS[cid]['desc']}"
+        for i, cid in enumerate(ids)
+    ]
+    place = PLACEMENTS.get(placement, PLACEMENTS["hero_center"])
+    return (
+        "Draw the recurring characters exactly as in the attached reference images (same design, colors, outfit): "
+        + "; ".join(parts)
+        + ". Ignore the reference backgrounds. Pose and expression follow the scene. "
+        + place + ", " + NEVER_ZONE + "."
+    )
 
 
 # v4.2: คำที่ทำให้โมเดลภาพเติมความน่ารัก/หน้าตาให้ของทุกอย่าง -> ตัดออกจากคำบรรยายฉากและ IDENTITY LOCK
@@ -203,14 +303,16 @@ def build_prompt(scene: dict) -> str:
                   "markings, and distinctive features. Only position, "
                   "camera angle, and environment may change as the scene requires."
             )
+    char_ids = scene_characters(scene)
+    char_instruction = character_instruction(char_ids, normalize_placement(scene.get("placement"), scene.get("id", 1)))
     # v3.6: ไม่ส่งบทพากย์ (narration) เข้าโมเดลภาพ เพราะ T1 พบว่าโมเดลเอาบทมาเขียนเป็นตัวหนังสือในภาพ
     # image_prompt บรรยายฉากครบในตัวอยู่แล้ว
     # ลำดับ: ฉาก -> identity -> มุมกล้อง -> สไตล์ (FLUX ให้น้ำหนักข้อความช่วงต้น)
-    parts = [style_for(has_living), f"Scene: {scene_desc}.", identity_instruction, shot]
+    parts = [style_for(has_living), f"Scene: {scene_desc}.", char_instruction, identity_instruction, shot]
     prompt = re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
     # เพดานความยาว prompt ภาพ (FLUX บน Cloudflare รับได้ราว 2048 ตัวอักษร) -> ตัดมุมกล้อง (ไม่บังคับ) ก่อน
     if len(prompt) > MAX_PROMPT_CHARS and shot:
-        prompt = re.sub(r"\s+", " ", " ".join(p for p in parts[:3] if p)).strip()
+        prompt = re.sub(r"\s+", " ", " ".join(p for p in parts[:-1] if p)).strip()  # ตัดเฉพาะมุมกล้อง (ตัวสุดท้าย)
     if len(prompt) > MAX_PROMPT_CHARS:
         print(f"WARNING: image prompt ฉาก {scene.get('id')} ยาว {len(prompt)} ตัวอักษร เกิน {MAX_PROMPT_CHARS} ผู้ให้บริการภาพอาจตัดท้ายข้อความ")
     return prompt

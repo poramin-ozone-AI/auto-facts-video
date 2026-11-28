@@ -7,6 +7,8 @@ Secrets: GEMINI_API_KEY (จำเป็น), GROQ_API_KEY (แนะนำเ�
   - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-3.5-flash-lite  คั่นด้วยจุลภาค)
   - GROQ_MODEL              (ค่าเริ่มต้น: openai/gpt-oss-120b)
   - SCRIPT_MIN_CHARS / SCRIPT_MAX_CHARS  (ค่าเริ่มต้นในโค้ดและ workflow: 520 / 900 ตัวอักษรของบทพากย์รวม)
+  - CHARACTERS_ENABLED      (ค่าเริ่มต้น: 1; v4.7) เปิด/ปิดตัวละครประจำคลิป OZONE + ORBI (ปิด = ไม่ขอฟิลด์ characters และไม่ส่งภาพอ้างอิง)
+  - HOOK_MAX_CHARS         (ค่าเริ่มต้น: 60; v4.8) ความยาวสูงสุดของคำถามฮุกในฉากที่ 1 (ราว 4-5 วินาที)
   - IMAGE_DETAIL_LEVEL      (ค่าเริ่มต้น: rich; ใช้ standard ถ้าภาพแน่นเกิน) กำหนดความละเอียดของ image_prompt และสไตล์ภาพ
   - SUBTITLES_ENABLED / SUBTITLE_KEYWORDS_ENABLED  (ค่าเริ่มต้น 1/1; ปิดอย่างใดอย่างหนึ่ง = ไม่ขอ keywords สำหรับซับสีเหลืองจาก AI)
   - GEMINI_MAX_OUTPUT_TOKENS / GROQ_MAX_TOKENS  (ค่าเริ่มต้น: 16384 / 6000) เพดานโทเคนคำตอบ กัน JSON ถูกตัด
@@ -23,7 +25,10 @@ import sys
 import time
 import requests
 
-from style import IMAGE_DETAIL_LEVEL, coerce_bool, extract_identities, has_face_words, strip_identity
+from style import (
+    CHARACTERS, CHARACTERS_ENABLED, PLACEMENTS, BOTTOM_RIGHT_RE, normalize_placement, IMAGE_DETAIL_LEVEL, coerce_bool, extract_identities, has_face_words,
+    normalize_characters, raw_character_items, strip_identity,
+)
 from subtitles import KEYWORDS_ENABLED
 
 OUT = pathlib.Path("output")
@@ -41,6 +46,7 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 # เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
 # ค่าเริ่มต้นในโค้ด 520-900 ตรงกับที่ workflow ตั้งไว้ ถ้าต้องการคลิปยาวขึ้นให้เพิ่ม SCRIPT_MAX_CHARS ใน workflow
 MIN_CHARS = int(os.getenv("SCRIPT_MIN_CHARS", "520"))
+HOOK_MAX_CHARS = int(os.getenv("HOOK_MAX_CHARS", "60"))  # v4.8: ความยาวสูงสุดของคำถามฮุก (ฉากที่ 1) ราว 4-5 วินาที
 MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "900"))
 MIN_SCENES, MAX_SCENES = 6, 12
 # เพดานโทเคนคำตอบ (v3.8: image_prompt ยาวขึ้น) Gemini นับโทเคนที่ "คิด" รวมด้วย จึงตั้งสูงไว้ก่อน
@@ -71,6 +77,38 @@ def keyword_prompt_parts() -> tuple[str, str]:
         "ห้ามใช้คำทั่วไปอย่าง และ แต่ ที่ เป็น มี ได้\n"
     )
     return rule, ' "keywords": ["คำสำคัญ"],'
+
+
+def character_prompt_parts() -> tuple[str, str]:
+    """(v4.7) คืน (กฎตัวละครใน PROMPT, ฟิลด์ใน JSON ตัวอย่าง) ว่างทั้งคู่ถ้าปิด CHARACTERS_ENABLED"""
+    if not CHARACTERS_ENABLED:
+        return "", ""
+    o, r = CHARACTERS["ozone"]["name"], CHARACTERS["robot"]["name"]
+    rule = (
+        f"- ตัวละครประจำคลิป: {o} (เด็กชายนักสำรวจชุดอวกาศผู้ช่างสงสัย) และ {r} (หุ่นยนต์ลอยตัวกลมคู่ใจของ {o}) "
+        "ระบบแนบภาพอ้างอิงและใส่รูปลักษณ์ของทั้งสองให้เองทุกครั้ง ทุกฉากต้องมีฟิลด์ characters เป็นลิสต์ของรหัส \"ozone\" และ/หรือ \"robot\" (ฉากที่ไม่มีตัวละคร = [])\n"
+        "- สัดส่วนตัวละคร: ใส่ตัวละครราวครึ่งหนึ่งของฉาก เน้นฉากแรก ฉากเปลี่ยนประเด็น และฉากจบ ฉากที่ต้องโชว์ข้อเท็จจริงล้วนๆ "
+        "(ภาพตัดขวาง ภาพขยายใกล้ จำนวน/ขนาด/สัดส่วน) ให้เป็น [] หรือให้ตัวละครตัวเล็กอยู่ริมภาพโดยไม่บังจุดโฟกัส "
+        "ต้องมีอย่างน้อย 2 ฉากที่มีตัวละคร และอย่างน้อย 2 ฉากที่ไม่มี\n"
+        f"- ในฉากที่มีตัวละคร image_prompt ต้องเรียกชื่อ {o} และ/หรือ {r} ตรงๆ แล้วออกแบบท่าทาง การกระทำ สีหน้า และตำแหน่งในภาพให้เข้ากับอารมณ์และเนื้อหา narration ของฉากนั้นเอง "
+        "(เช่น ตื่นเต้น ประหลาดใจ สงสัย ครุ่นคิด ดีใจ กังวล) เปลี่ยนไปตามฉาก ไม่ใช้ท่าเดิมซ้ำทุกฉาก และตัวละครต้องมองหรือชี้สิ่งที่ narration พูดถึง\n"
+        f"- ห้ามบรรยายหน้าตา ผม ชุด สี หรือรูปร่างของ {o} และ {r} (ระบบใส่ให้แล้ว) ห้ามใส่ IDENTITY LOCK ให้สองตัวนี้ (สัตว์หรือตัวอื่นในฉากยังใช้ IDENTITY LOCK ตามกฎเดิม) "
+        f"เรียก {r} ด้วยชื่อ {r} เท่านั้น ไม่ใช้คำว่า robot ใน image_prompt\n"
+        f"- สีหน้าของ {r} แสดงบนหน้าจอสีดำ ให้เขียนเป็น \"{r}'s screen shows ...\" เช่น happy closed-arc eyes, sparkling star eyes, wide round surprised eyes, worried eyes, sleepy eyes "
+        f"และ {r} ลอยอยู่กลางอากาศ ไม่มีขา\n"
+        f"- ตัวละครห้ามเพิ่มข้อเท็จจริง วัตถุ เหตุการณ์ เครื่องมือ หรือเปลี่ยนชุดที่ narration ไม่ได้พูดถึง ห้ามบังจุดโฟกัสของข้อเท็จจริง "
+        "narration ยังเป็นเสียงผู้บรรยายคนเดียว ห้ามเขียนเป็นบทสนทนาหรือให้ตัวละครพูด และ ORBI ไม่มีบทพูดหรือฉากปฏิกิริยาแยก "
+        "(แสดงอารมณ์ผ่านสีหน้าบนหน้าจอเท่านั้น)\n"
+        "- ตำแหน่งตัวละคร: ทุกฉากที่มีตัวละครต้องมีฟิลด์ placement เลือก 1 ค่า: "
+        "\"hero_center\" (ใช้เฉพาะฉากที่ 1: ตัวละครใหญ่ ใกล้กล้อง เห็นหน้าชัด อยู่กลางภาพได้), "
+        "\"left_edge\" (ขอบซ้าย ช่วงบนหรือกลาง), \"right_edge\" (ขอบขวา ช่วงบนหรือกลาง), "
+        "\"top_peek\" (โผล่จากขอบบน เห็นครึ่งบนและหน้า), \"bottom_left\" (มุมซ้ายล่างเหนือพื้นที่ซับ ตัวเล็ก) "
+        "ห้ามเลือกตำแหน่งเดียวกับฉากก่อนหน้าที่มีตัวละคร และต้องเลือกให้ไม่บังจุดโฟกัสของข้อเท็จจริง "
+        "ตัวละครโผล่มาครึ่งตัวหรือถูกขอบภาพตัดได้ตามเนื้อหา ถ้าเลือกตำแหน่งขอบ ให้เขียนใน image_prompt ด้วยว่าตัวละครอยู่ตำแหน่งนั้นและถูกเฟรมตัดอย่างไร "
+        "(เช่น \"ORBI peeks in from the top edge, upper half visible, cropped by the frame\") และจุดโฟกัสของข้อเท็จจริงต้องอยู่ฝั่งตรงข้ามหรือกลางภาพ "
+        "ห้ามวางตัวละครที่มุมขวาล่างทุกกรณี (เป็นที่ของปุ่มแพลตฟอร์ม) และห้ามเขียนคำว่า bottom right / lower right ใน image_prompt ขอบล่างต้องโล่งสำหรับซับ\n"
+    )
+    return rule, ' "characters": ["ozone", "robot"], "placement": "hero_center",'
 
 
 def image_rules() -> str:
@@ -147,9 +185,9 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - อย่าขยายข้อเท็จจริงให้เกินหลักฐาน และอย่าใช้คำว่า “ทุก”, “เสมอ”, “ไม่มีทาง” หรือคำยืนยันเด็ดขาด หากข้อเท็จจริงมีข้อยกเว้น
 - เพิ่ม source_hint เป็นลิสต์ชื่อแหล่งข้อมูล/หน่วยงานที่น่าเชื่อถือ 2-4 แห่งที่เกี่ยวข้องกับข้อเท็จจริงสำคัญ เพื่อใช้ตรวจสอบภายหลัง ห้ามแต่ง URL หรืออ้างว่าได้เปิดอ่านแหล่งข้อมูลแล้ว
 - โครงเรื่องต้องมีการเดินหน้า ไม่ใช่การเรียงเกร็ดที่ไม่เกี่ยวกัน: เปิดด้วยข้อเท็จจริง/คำถามที่น่าทึ่งที่สุด, อธิบายว่าทำไมเรื่องนี้จึงเกิดขึ้น, ค่อยๆ เปิดเผยรายละเอียดหรือผลที่ตามมา แล้วปิดด้วยข้อสรุปที่ทำให้ผู้ชมเข้าใจเรื่องได้ครบ
-- ฉากที่ 1 ต้องเป็น HOOK ทันที: เริ่มด้วยประโยคที่เฉพาะเจาะจง ชวนสงสัย หรือขัดกับความเข้าใจทั่วไป โดยให้ข้อมูลจริงที่น่าสนใจ ไม่ทักทาย ไม่แนะนำตัว ไม่พูดว่า “วันนี้เราจะมา...” และไม่เกริ่นนำยาว
-- หลัง HOOK อย่าเฉลยทุกอย่างในทันที ให้ฉากถัดไปขยายคำถาม/บริบทและทยอยให้คำตอบอย่างมีลำดับ แต่ห้ามจงใจปิดบังข้อมูลสำคัญจนทำให้เข้าใจผิด
-- ทุกฉากต้องเพิ่มข้อเท็จจริง มุมอธิบาย ตัวอย่าง หรือผลลัพธ์ใหม่ที่จำเป็นต่อเรื่อง หากตัดฉากนั้นออกแล้วใจความไม่เปลี่ยน ให้รวม/ตัดเนื้อหาซ้ำแทนการยืดบท
+- ฉากที่ 1 ต้องเป็น HOOK ทันที: เป็น “คำถามสั้นๆ” ที่เฉพาะเจาะจง น่าติดตาม และชวนอยากรู้คำตอบ (ไม่เกิน {hook_max} ตัวอักษร ลงท้ายด้วย ? หรือคำถามภาษาไทย เช่น ไหม ทำไม อะไร กี่) ไม่ทักทาย ไม่แนะนำตัว ไม่พูดว่า “วันนี้เราจะมา...” ไม่เกริ่นนำยาว และห้ามมีข้อมูลผิดแฝงในคำถาม ต้องตอบได้จริงด้วยข้อเท็จจริงในฉากถัดไป ฉากที่ 1 เป็นข้อยกเว้นของกฎ “ทุกฉากต้องเพิ่มข้อเท็จจริงใหม่” ได้ เพราะเป็นคำถามเปิด
+- ฉากที่ 2 ต้องเริ่มตอบคำถามของ HOOK ทันที แล้วขยายบริบทและทยอยให้คำตอบอย่างมีลำดับ แต่ห้ามจงใจปิดบังข้อมูลสำคัญจนทำให้เข้าใจผิด
+- ทุกฉาก (ยกเว้นฉากที่ 1 ที่เป็นคำถามเปิด) ต้องเพิ่มข้อเท็จจริง มุมอธิบาย ตัวอย่าง หรือผลลัพธ์ใหม่ที่จำเป็นต่อเรื่อง หากตัดฉากนั้นออกแล้วใจความไม่เปลี่ยน ให้รวม/ตัดเนื้อหาซ้ำแทนการยืดบท
 - เชื่อมฉากด้วยเหตุและผลหรือคำถามที่ฉากถัดไปตอบได้ ใช้คำเชื่อมเป็นธรรมชาติ ไม่ต้องลงท้ายทุกฉากด้วย cliffhanger หรือคำถาม
 - ตอนจบต้องตอบหรือคลี่คลายประเด็นที่เปิดไว้ และทิ้งข้อคิด/ภาพจำสั้นๆ ที่เกี่ยวข้องกับเรื่อง ห้ามจบด้วย CTA บังคับหรือคำชวนกดติดตามที่ไม่จำเป็น
 - ใน narration ให้เขียนตัวเลขทศนิยม หน่วย และตัวย่อวิทยาศาสตร์เป็นคำอ่านภาษาไทยที่ TTS อ่านได้เป็นธรรมชาติ เช่น 37.2 เป็น “สามสิบเจ็ดจุดสอง” และ CO₂ เป็น “คาร์บอนไดออกไซด์”; คงรูปแบบตัวเลขใน image_prompt ได้ตามความเหมาะสม
@@ -170,11 +208,11 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรงและตรงตามรายละเอียดที่พูด ห้ามเป็นภาพบรรยากาศทั่วไป เช่น ถ้า narration พูดถึงลักษณะของดวงจันทร์ (หลุมบนพื้นผิว เฟสของดวงจันทร์ สี ตำแหน่งบนท้องฟ้า) ภาพต้องแสดงหลุม เฟส สี และตำแหน่งนั้นจริง จำนวน ขนาด สัดส่วน สี ตำแหน่ง และลำดับเหตุการณ์ที่ narration พูดต้องสื่อให้เห็นผ่านองค์ประกอบภาพอย่างถูกต้อง แต่ห้ามสร้างตัวหนังสือ/ตัวเลข/ป้ายกำกับบนภาพ
 - ถ้าสิ่งที่พูดถึงมองไม่เห็นจากภายนอก (เช่น ใต้ดิน ภายในร่างกาย จุลชีพ ใต้ทะเลลึก ภายในอะตอม) ให้ image_prompt เป็นภาพตัดขวางหรือภาพขยายใกล้ที่เห็นสิ่งนั้นชัดเจน ขึ้นต้นด้วยคำว่า cross-section cutaway view หรือ close-up macro view เช่น cross-section cutaway view of soil showing tree roots connected by thin glowing fungal threads
 - ถ้าฉากเป็นภาพตัดขวาง/ภาพขยายใกล้ ให้บรรทัดแรกของ image_prompt ขึ้นต้นด้วย cross-section cutaway view หรือ close-up macro view แล้วค่อยมีบรรทัด IDENTITY LOCK ตามหลัง (ถ้ามี)
-{image_rules}
+{char_rule}{image_rules}
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป", "source_hint": ["ชื่อหน่วยงานหรือแหล่งข้อมูล"],
-  "scenes": [{{"id": 1, "narration": "ข้อความพากย์",{kw_field} "has_living": true, "image_prompt": "..."}}]}}"""
+  "scenes": [{{"id": 1, "narration": "ข้อความพากย์",{kw_field} "has_living": true,{char_field} "image_prompt": "..."}}]}}"""
 
 
 class NonRetryable(Exception):
@@ -291,7 +329,7 @@ def nonliving_with_face(ident: str) -> bool:
 
 def object_with_face(text: str) -> bool:
     """ฉากมีสิ่งมีชีวิต: True ถ้าประโยคใดผูกหน้าตา/แขนขาเข้ากับวัตถุไม่มีชีวิต"""
-    for sentence in re.split(r"[.;!?\n]+", str(text)):
+    for sentence in re.split(r"[.;!?,\n]+", str(text)):  # v4.7: ตัดที่จุลภาคด้วย กัน "moon with craters, eyes wide" ถูกอ่านเป็นดวงจันทร์มีตา
         if any(rx.search(sentence) for rx in _OBJECT_FACE_RES):
             return True
     return False
@@ -346,6 +384,80 @@ def check_identities(scenes: list) -> list[str]:
     return errs
 
 
+def check_scene_characters(i: int, s: dict, img: str) -> list[str]:
+    """(v4.7) ตรวจฟิลด์ characters ของฉาก; ตั้ง s["characters"] เป็นรหัสที่ถูกต้อง (ปิดระบบ = ลิสต์ว่าง)"""
+    if not CHARACTERS_ENABLED:
+        s["characters"] = []
+        return []
+    raw = raw_character_items(s.get("characters"))
+    ids = normalize_characters(raw)
+    errs = []
+    unknown = [x for x in raw if x not in CHARACTERS]
+    if unknown:
+        errs.append(f"ฉาก {i}: characters มีรหัสที่ไม่รู้จัก {unknown} ใช้ได้เฉพาะ {list(CHARACTERS)} (ไม่มีตัวละคร = [])")
+    s["characters"] = ids
+    for cid in ids:
+        name = CHARACTERS[cid]["name"]
+        if not re.search(rf"\b{re.escape(name)}\b", img, re.I):
+            errs.append(f"ฉาก {i}: characters มี '{cid}' แต่ image_prompt ไม่ได้เรียกชื่อ {name} ตรงๆ ให้เขียนท่าทาง สีหน้า ตำแหน่งของ {name} ในฉากนี้")
+    if ids:
+        banned = {"robot"} | {c["name"].lower() for c in CHARACTERS.values()}
+        for ident in extract_identities(img):
+            if banned & set(re.findall(r"[a-z]+", identity_head(ident))):
+                errs.append(f"ฉาก {i}: ห้ามใส่ IDENTITY LOCK ของตัวละครประจำ ('{ident[:40]}') ระบบใส่รูปลักษณ์ให้เองจากภาพอ้างอิง")
+    return errs
+
+
+HOOK_QUESTION_RE = re.compile(r"[?？]|ไหม|หรือเปล่า|หรือไม่|อะไร|ทำไม|อย่างไร|ยังไง|เท่าไร|เท่าไหร่|ใคร|ที่ไหน|เมื่อไร|เมื่อไหร่|กี่|หรือ")
+HOOK_GREETING_RE = re.compile(r"สวัสดี|ยินดีต้อนรับ|วันนี้เรา|วันนี้ผม|วันนี้เรามา|ยินดีที่ได้|ขอต้อนรับ")
+
+
+def check_hook(scenes: list) -> list[str]:
+    """(v4.8) ฉากที่ 1 ต้องเป็นคำถามสั้นๆ ไม่ทักทาย"""
+    if not scenes or not isinstance(scenes[0], dict):
+        return []
+    text = str(scenes[0].get("narration", "")).strip()
+    errs = []
+    if HOOK_GREETING_RE.search(text):
+        errs.append("ฉากที่ 1: ห้ามทักทายหรือแนะนำตัว ให้เปิดด้วยคำถามสั้นๆ ที่น่าติดตามทันที")
+    if not HOOK_QUESTION_RE.search(text):
+        errs.append("ฉากที่ 1: ต้องเป็นคำถามสั้นๆ (ลงท้ายด้วย ? หรือคำถามภาษาไทย เช่น ไหม ทำไม อะไร กี่)")
+    if len(text) > HOOK_MAX_CHARS:
+        errs.append(f"ฉากที่ 1: คำถามฮุกยาว {len(text)} ตัวอักษร ต้องไม่เกิน {HOOK_MAX_CHARS} ให้ตัดให้สั้นลง")
+    return errs
+
+
+def check_placements(scenes: list) -> list[str]:
+    """(v4.8) ตรวจ placement: ค่าถูกต้อง, ฉากที่ 1 ต้องมีตัวละครแบบ hero_center, hero_center เฉพาะฉากที่ 1,
+    ไม่ซ้ำกับฉากก่อนหน้าที่มีตัวละคร, image_prompt ไม่มีมุมขวาล่าง; ตั้ง s["placement"] เป็นค่าที่ถูกต้อง (ไม่มีตัวละคร = "")"""
+    if not CHARACTERS_ENABLED:
+        return []
+    errs, prev = [], None
+    for i, s in enumerate(scenes, 1):
+        if not isinstance(s, dict):
+            continue
+        if not s.get("characters"):
+            s["placement"] = ""
+            if i == 1:
+                errs.append("ฉากที่ 1: ต้องมีตัวละคร (OZONE เป็นผู้ถามฮุก) แบบ hero_center")
+            continue
+        raw = str(s.get("placement") or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if raw not in PLACEMENTS:
+            errs.append(f"ฉาก {i}: placement '{raw}' ไม่ถูกต้อง ใช้ได้เฉพาะ {list(PLACEMENTS)}")
+        elif raw == "hero_center" and i != 1:
+            errs.append(f"ฉาก {i}: hero_center ใช้ได้เฉพาะฉากที่ 1 ฉากนี้ให้เลือกตำแหน่งขอบอื่น")
+        pl = normalize_placement(raw, i)
+        s["placement"] = pl
+        if i == 1 and pl != "hero_center":
+            errs.append("ฉากที่ 1: ต้องมีตัวละครแบบ hero_center (ใหญ่ เห็นหน้าชัด)")
+        if prev is not None and pl == prev:
+            errs.append(f"ฉาก {i}: placement '{pl}' ซ้ำกับฉากก่อนหน้าที่มีตัวละคร ให้เลือกตำแหน่งอื่น")
+        if BOTTOM_RIGHT_RE.search(str(s.get("image_prompt", ""))):
+            errs.append(f"ฉาก {i}: image_prompt มีตำแหน่งมุมขวาล่าง ห้ามวางตัวละครหรือจุดสำคัญที่มุมนั้น (เป็นที่ของปุ่มแพลตฟอร์ม)")
+        prev = pl
+    return errs
+
+
 def validate(d: dict, used_topics: list[str]) -> list[str]:
     """คืนรายการข้อผิดพลาด (ว่าง = ผ่าน)"""
     errs = []
@@ -381,6 +493,10 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
         if has_living is None:
             has_living = bool(extract_identities(img))
             print(f"WARNING: ฉาก {i}: has_living หายไปหรือไม่ถูกต้อง -> ใช้ผลจาก IDENTITY LOCK ({has_living})")
+        char_errs = check_scene_characters(i, s, img)
+        errs.extend(char_errs)
+        if s["characters"]:
+            has_living = True  # v4.7: ฉากที่มีตัวละครประจำเป็นฉากมีชีวิตเสมอ
         s["has_living"] = has_living
         errs.extend(check_scene_faces(i, s, has_living))
         s["id"] = i
@@ -399,6 +515,12 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
                     print(f"WARNING: ฉาก {i}: keyword '{k}' ไม่อยู่ใน narration ตรงตัว/ไม่เหมาะ -> ตัดทิ้ง")
             s["keywords"] = clean[:2]
     errs.extend(check_identities(scenes))
+    errs.extend(check_hook(scenes))
+    errs.extend(check_placements(scenes))
+    if CHARACTERS_ENABLED:
+        with_chars = sum(1 for s in scenes if isinstance(s, dict) and s.get("characters"))
+        if with_chars < 2 or len(scenes) - with_chars < 2:
+            errs.append(f"มีตัวละครใน {with_chars}/{len(scenes)} ฉาก ต้องมีอย่างน้อย 2 ฉากที่มีตัวละครและอย่างน้อย 2 ฉากที่ไม่มี (เป้าราวครึ่งหนึ่ง)")
     total = sum(len(str(s.get("narration", "")).strip()) for s in scenes if isinstance(s, dict))
     if not (MIN_CHARS <= total <= MAX_CHARS):
         errs.append(f"ความยาวบทรวม {total} ตัวอักษร ต้องอยู่ระหว่าง {MIN_CHARS}-{MAX_CHARS}")
@@ -423,6 +545,7 @@ def main():
     prompt = PROMPT.format(
         history="\n".join(f"- {h}" for h in history) or "(ยังไม่มี)",
         min_c=MIN_CHARS,
+        hook_max=HOOK_MAX_CHARS,
         max_c=MAX_CHARS,
         min_s=MIN_SCENES,
         max_s=MAX_SCENES,
@@ -430,6 +553,8 @@ def main():
         image_rules=image_rules(),
         kw_rule=keyword_prompt_parts()[0],
         kw_field=keyword_prompt_parts()[1],
+        char_rule=character_prompt_parts()[0],
+        char_field=character_prompt_parts()[1],
     )
     print(f"หมวดประจำวัน: {todays_category()} | ระดับรายละเอียดภาพ: {IMAGE_DETAIL_LEVEL}")
 

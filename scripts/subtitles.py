@@ -11,7 +11,7 @@
   SUBTITLES_ENABLED (1)          เปิด/ปิดซับทั้งหมด
   SUBTITLE_KEYWORDS_ENABLED (1)  เปิด/ปิดสีเหลืองคำสำคัญ (ปิด = ไม่ขอ keywords จาก AI ด้วย)
   SUBTITLE_FONT (Loma)           ชื่อฟอนต์ไทยที่ติดตั้งในเครื่อง (workflow ติดตั้ง fonts-thai-tlwg)
-  SUBTITLE_FONT_SIZE (78)        ขนาดตัวอักษร (หน่วยพิกเซลบนวิดีโอ 1080x1920)
+  SUBTITLE_FONT_SIZE (96)        ขนาดตัวอักษร (หน่วยพิกเซลบนวิดีโอ 1080x1920)
   SUBTITLE_MAX_CHARS (22)        จำนวนตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว)
   SUBTITLE_MARGIN_BOTTOM (345)   ระยะจากขอบล่าง (พิกเซล; 345 ~ 18% ของความสูง 1920 เลี่ยงปุ่ม Shorts/TikTok)
   SUBTITLE_MARGIN_SIDE (90)      ระยะขอบซ้าย/ขวา
@@ -30,7 +30,7 @@ W, H = 1080, 1920
 ENABLED = os.getenv("SUBTITLES_ENABLED", "1") != "0"
 KEYWORDS_ENABLED = ENABLED and os.getenv("SUBTITLE_KEYWORDS_ENABLED", "1") != "0"
 FONT = os.getenv("SUBTITLE_FONT", "Loma")
-FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "78"))
+FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "96"))
 MAX_CHARS = max(8, int(os.getenv("SUBTITLE_MAX_CHARS", "22")))
 MARGIN_BOTTOM = int(os.getenv("SUBTITLE_MARGIN_BOTTOM", "345"))
 MARGIN_SIDE = int(os.getenv("SUBTITLE_MARGIN_SIDE", "90"))

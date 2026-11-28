@@ -6,6 +6,12 @@ v4.4: ใช้โมเดลเดียวคือ Cloudflare Workers AI FLU
   - ถ้า klein ล้มเหลวจริง (429 ซ้ำจนหมดรอบ, 401/403/404 หรือ error ซ้ำทุกรอบ) การรันจะล้มทันที ไม่มีคลิปของวันนั้น
     (หัวข้อจะไม่ถูกบันทึกเป็นใช้แล้ว) จึงให้ retry หลายรอบและรอ 429 นานขึ้นเพื่อให้ทนกว่าเดิม
 
+v4.7: ตัวละครประจำคลิป (OZONE + ORBI) ส่งเป็นภาพอ้างอิง input_image_0..N (multipart) เฉพาะฉากที่ระบุ characters ใน script.json
+  - เตรียมภาพอ้างอิงตอนรัน: ตัดขอบโปร่งใส -> แปะบนพื้น CHAR_REF_BG -> ย่อ/ขยายให้ด้านยาวสุด = CHAR_REF_MAX_SIDE (เอกสาร Cloudflare จำกัดภาพอ้างอิง < 512x512)
+  - ถ้า Cloudflare ปฏิเสธเพราะภาพอ้างอิง (HTTP 400/422) หยุดการรันพร้อมข้อความชัดเจน ไม่ถอยไปวาดแบบไม่มีภาพอ้างอิงเงียบๆ
+  - บันทึก prompt ที่ส่งจริงไว้ที่ output/images/prompt_NN.txt เพื่อตรวจย้อนหลัง
+  - ตัวแปร env: CHARACTERS_ENABLED (1), CHAR_REF_MAX_SIDE (480), CHAR_REF_BG (white | cream | black)
+
 โหมดทดสอบ: python scripts/3_generate_images.py --test   (สร้างแค่ 2 ฉาก คือฉากแรกกับฉากกลาง โดยไม่ทับ script.json)
 Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (จำเป็น ถ้าไม่มีจะหยุดทันที)
 ตัวแปร env ที่ปรับได้:
@@ -15,6 +21,7 @@ Secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (จำเป็น ถ้�
   - IMAGE_RATE_LIMIT_WAIT       (ค่าเริ่มต้น: 60) วินาทีที่รอเมื่อเจอ 429 ครั้งแรก ครั้งต่อไปรอเพิ่มเป็น 2x, 3x, ... (สูงสุด 300 วินาที/ครั้ง)
 """
 import base64
+import io
 import json
 import os
 import pathlib
@@ -25,7 +32,7 @@ import time
 import requests
 from PIL import Image
 
-from style import build_prompt
+from style import CHARACTERS, build_prompt, scene_characters
 
 OUT = pathlib.Path("output")
 IMG = OUT / "images"
@@ -42,6 +49,13 @@ RATE_LIMIT_RETRIES = max(0, int(os.getenv("IMAGE_RATE_LIMIT_RETRIES", "4")))
 RATE_LIMIT_WAIT = max(1, int(os.getenv("IMAGE_RATE_LIMIT_WAIT", "60")))
 RATE_LIMIT_WAIT_CAP = 300
 RETRY_BACKOFF = 4  # วินาที x เลขรอบ (สูงสุด 30)
+
+# v4.7: ภาพอ้างอิงตัวละคร
+CHAR_REF_MAX_SIDE = max(64, min(511, int(os.getenv("CHAR_REF_MAX_SIDE", "480"))))  # ต้องน้อยกว่า 512
+CHAR_REF_BG = os.getenv("CHAR_REF_BG", "white").strip().lower()
+_BG_COLORS = {"white": (255, 255, 255), "cream": (250, 244, 232), "black": (0, 0, 0)}
+_REF_CACHE: dict[str, bytes] = {}
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 class FatalAPIError(Exception):
@@ -64,15 +78,49 @@ def image_bytes_from_response(r: requests.Response) -> bytes:
     raise ValueError(f"ไม่พบภาพใน response: {str(payload)[:250]}")
 
 
-def gen_cloudflare_klein(model: str, prompt: str) -> bytes:
-    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 720x1280 ไม่ต้องครอป) ต้องส่งแบบ multipart เสมอ (ไม่ส่งภาพอ้างอิง)"""
+def prepare_reference(char_id: str) -> bytes:
+    """ภาพอ้างอิงตัวละคร -> PNG (RGB) ที่ตัดขอบโปร่งใสแล้วแปะบนพื้นเรียบ ด้านยาวสุด = CHAR_REF_MAX_SIDE (ไม่เกิน 511)"""
+    if char_id in _REF_CACHE:
+        return _REF_CACHE[char_id]
+    path = pathlib.Path(CHARACTERS[char_id]["ref"])
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    if not path.exists():
+        sys.exit(f"ไม่พบภาพอ้างอิงตัวละคร '{char_id}': {path} (ต้อง commit ไฟล์ใน assets/characters/ ขึ้น repo)")
+    with Image.open(path) as im:
+        im = im.convert("RGBA")
+    bbox = im.getchannel("A").point(lambda v: 255 if v > 10 else 0).getbbox()
+    if bbox:
+        pad = int(max(im.size) * 0.03)
+        bbox = (max(0, bbox[0] - pad), max(0, bbox[1] - pad), min(im.width, bbox[2] + pad), min(im.height, bbox[3] + pad))
+        im = im.crop(bbox)
+    scale = CHAR_REF_MAX_SIDE / max(im.size)
+    im = im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.LANCZOS)
+    bg = Image.new("RGBA", im.size, _BG_COLORS.get(CHAR_REF_BG, _BG_COLORS["white"]) + (255,))
+    bg.alpha_composite(im)
+    out = io.BytesIO()
+    bg.convert("RGB").save(out, format="PNG")
+    _REF_CACHE[char_id] = out.getvalue()
+    return _REF_CACHE[char_id]
+
+
+def gen_cloudflare_klein(model: str, prompt: str, refs: list[bytes] | None = None) -> bytes:
+    """FLUX.2 klein: รับ width/height ตรงๆ (ได้ 720x1280 ไม่ต้องครอป) ต้องส่งแบบ multipart เสมอ
+    v4.7: refs = ภาพอ้างอิง (PNG bytes) ส่งเป็น input_image_0..N ตามลำดับ (สูงสุด 4 ภาพ)"""
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{model}"
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
     fields = {"prompt": (None, prompt), "width": (None, str(W)), "height": (None, str(H))}
+    for i, data in enumerate((refs or [])[:4]):
+        fields[f"input_image_{i}"] = (f"ref_{i}.png", data, "image/png")
     r = requests.post(url, headers=headers, files=fields, timeout=180)
-    print(f"  [cloudflare:{model}] HTTP {r.status_code}")
+    print(f"  [cloudflare:{model}] HTTP {r.status_code}" + (f" (ภาพอ้างอิง {len(refs)} ภาพ)" if refs else ""))
     if r.status_code in (401, 403, 404):
         raise FatalAPIError(f"HTTP {r.status_code}: {r.text[:200]}")
+    if refs and r.status_code in (400, 422):
+        raise FatalAPIError(
+            f"HTTP {r.status_code} จากคำขอที่มีภาพอ้างอิง: {r.text[:300]} | ตรวจขนาดภาพอ้างอิง (CHAR_REF_MAX_SIDE ต้อง < 512) "
+            "หรือสั่ง CHARACTERS_ENABLED=0 เพื่อปิดตัวละครชั่วคราว"
+        )
     if r.status_code == 429:
         raise RateLimited("โควตาเต็มหรือเซิร์ฟเวอร์เต็ม (429)")
     r.raise_for_status()
@@ -185,7 +233,12 @@ def main():
         raw = IMG / f"raw_{int(s['id']):02d}.png"
         final = IMG / f"scene_{int(s['id']):02d}.png"
         prompt = build_prompt(s)
-        generate_image(prompt, raw, lambda p: gen_cloudflare_klein(CF_MODEL, p), label=f"ฉาก {s['id']}")
+        char_ids = scene_characters(s)
+        refs = [prepare_reference(c) for c in char_ids]
+        if char_ids:
+            print(f"  ตัวละครในฉาก: {char_ids} (ส่งภาพอ้างอิง {len(refs)} ภาพ)")
+        (IMG / f"prompt_{int(s['id']):02d}.txt").write_text(prompt, encoding="utf-8")
+        generate_image(prompt, raw, lambda p, refs=refs: gen_cloudflare_klein(CF_MODEL, p, refs), label=f"ฉาก {s['id']}")
         finalize_image(raw, final)
         s["image"] = str(final)
         s["image_provider"] = provider
