@@ -187,6 +187,43 @@ def generate(prompt: str, raw_path: pathlib.Path, providers, dead: set) -> str:
     sys.exit(f"สร้างภาพไม่สำเร็จทุกผู้ให้บริการ: {raw_path.name}")
 
 
+
+QC_REGENERATE_ATTEMPTS = max(0, int(os.getenv("IMAGE_QC_REGENERATE_ATTEMPTS", "1")))
+
+
+def regenerate_same_provider(prompt: str, raw_path: pathlib.Path, provider, dead: set) -> bool:
+    """ลองสร้างใหม่ด้วย provider เดิมหนึ่งครั้งเมื่อ QC ไม่ผ่าน โดยไม่ปิด provider ทั้งคลิป"""
+    name, fn = provider
+    raw_path.unlink(missing_ok=True)
+    rate_limited_once = False
+    for attempt in range(1, 3):
+        try:
+            data = fn(prompt)
+            raw_path.write_bytes(data)
+            if raw_path.stat().st_size > 5000:
+                print(f"  [{name}] สร้างซ้ำด้วยโมเดลเดิมสำเร็จ")
+                return True
+            print(f"  [{name}] สร้างซ้ำแล้วไฟล์เล็กผิดปกติ ({raw_path.stat().st_size} bytes)")
+        except RateLimited as e:
+            if rate_limited_once:
+                print(f"  [{name}] 429 ซ้ำระหว่าง QC retry -> ข้าม provider นี้ ({e})")
+                dead.add(name)
+                break
+            rate_limited_once = True
+            print(f"  [{name}] QC retry เจอ 429 -> รอ {RATE_LIMIT_WAIT} วินาทีแล้วลองอีกครั้ง")
+            time.sleep(RATE_LIMIT_WAIT)
+            continue
+        except ProviderDown as e:
+            print(f"  [{name}] provider ใช้ไม่ได้ -> {e}")
+            dead.add(name)
+            break
+        except Exception as e:
+            body = getattr(getattr(e, "response", None), "text", "") or ""
+            print(f"  [{name}] QC retry ล้มเหลว: {type(e).__name__}: {e} {body[:200]}")
+            break
+    raw_path.unlink(missing_ok=True)
+    return False
+
 def to_9x16(raw: pathlib.Path, final: pathlib.Path):
     """ปรับเป็น 720x1280 โดย 'ไม่ตัดภาพ': ถ้าต้นฉบับไม่ใช่ 9:16 จะย่อให้พอดีความกว้างแล้วเติมขอบบน/ล่างด้วยภาพเดียวกันที่เบลอ"""
     w, h = probe_size(raw)
@@ -247,15 +284,40 @@ def main():
         to_9x16(raw, final)
         qc_issues = inspect_image(final)
         if qc_issues:
-            print(f"  Image QC ไม่ผ่านจาก {name}: {'; '.join(qc_issues)} -> ลองผู้ให้บริการสำรอง")
-            dead.add(name)
-            raw.unlink(missing_ok=True)
-            final.unlink(missing_ok=True)
-            name = generate(prompt, raw, providers, dead)
-            to_9x16(raw, final)
-            qc_issues = inspect_image(final)
-            if qc_issues:
-                sys.exit(f"Image QC ไม่ผ่านฉาก {s['id']} แม้ใช้ตัวสำรอง: {'; '.join(qc_issues)} | หยุดเพื่อไม่ใช้ภาพเสี่ยง")
+            print(f"  Image QC ไม่ผ่านจาก {name}: {'; '.join(qc_issues)}")
+            provider_index = next((i for i, item in enumerate(providers) if item[0] == name), -1)
+
+            # QC failure เป็นปัญหาระดับภาพ ไม่ใช่หลักฐานว่า provider เสีย:
+            # ลองสร้างใหม่ด้วย provider เดิมก่อน และอย่าใส่ชื่อเข้า dead
+            regenerated = False
+            if QC_REGENERATE_ATTEMPTS > 0 and provider_index >= 0:
+                final.unlink(missing_ok=True)
+                for qc_attempt in range(QC_REGENERATE_ATTEMPTS):
+                    print(f"  Image QC: ลองสร้างใหม่ด้วย {name} ({qc_attempt + 1}/{QC_REGENERATE_ATTEMPTS})")
+                    if not regenerate_same_provider(prompt, raw, providers[provider_index], dead):
+                        break
+                    to_9x16(raw, final)
+                    qc_issues = inspect_image(final)
+                    if not qc_issues:
+                        regenerated = True
+                        break
+                    print(f"  [{name}] ภาพที่สร้างซ้ำยังไม่ผ่าน QC: {'; '.join(qc_issues)}")
+                    final.unlink(missing_ok=True)
+
+            if not regenerated:
+                # ใช้เฉพาะ provider ที่อยู่ถัดจากตัวที่เพิ่ง QC ไม่ผ่าน
+                # ฉากถัดไปจะเริ่มจากลำดับหลักใหม่ตามปกติ
+                fallback_providers = providers[provider_index + 1:] if provider_index >= 0 else providers
+                print(f"  Image QC: ลอง provider สำรองถัดไป โดยยังคงเปิด {name} สำหรับฉากถัดไป")
+                raw.unlink(missing_ok=True)
+                final.unlink(missing_ok=True)
+                if not fallback_providers:
+                    sys.exit(f"Image QC ไม่ผ่านฉาก {s['id']} และไม่มี provider สำรอง: {'; '.join(qc_issues)}")
+                name = generate(prompt, raw, fallback_providers, dead)
+                to_9x16(raw, final)
+                qc_issues = inspect_image(final)
+                if qc_issues:
+                    sys.exit(f"Image QC ไม่ผ่านฉาก {s['id']} แม้ใช้ตัวสำรอง: {'; '.join(qc_issues)} | หยุดเพื่อไม่ใช้ภาพเสี่ยง")
         s["image"] = str(final)
         s["image_provider"] = name
         used.append(name)
