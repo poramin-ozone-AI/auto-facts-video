@@ -22,10 +22,6 @@
 โหมดทดสอบ: python scripts/2_generate_voice.py --test
   (สร้างเสียงแค่ 2 ฉาก: ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกใกล้กลางคลิปที่สุด; ไม่ทับ script.json
    ไม่ตรวจช่วงความยาวรวม; ใช้ผู้ให้บริการ/fallback ตามปกติ ดูบรรทัดสรุปว่าเป็น gemini หรือ edge)
-  - VOICE_PER_SCENE_EMOTION (v4.0 ค่าเริ่มต้น: 0) 0 = ใช้สไตล์เสียงเดียวกันทุกฉาก (เสียงคงที่ทั้งคลิป)
-    1 = เปิดอารมณ์ตาม voice_direction รายฉากแบบ v3.7 (ผู้ใช้พบว่าเสียงเปลี่ยนเมื่อเปลี่ยนฉาก จึงปิดเป็นค่าเริ่มต้น)
-  - voice_direction ในแต่ละ scene (v4.0: ไม่ถูกใช้กับ TTS เมื่อ VOICE_PER_SCENE_EMOTION=0): curious / informative / excited / mysterious / emphatic / warm
-    (ถ้า script.json รุ่นเก่าไม่มีฟิลด์นี้ จะใช้ informative)
 """
 import asyncio
 import base64
@@ -53,7 +49,6 @@ GEMINI_TTS_MODELS = [GEMINI_TTS_MODEL] + [m for m in GEMINI_TTS_FALLBACKS if m !
 USED_TTS_MODEL = None
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Orus")
 GEMINI_TTS_DELAY = float(os.getenv("GEMINI_TTS_DELAY", "31"))
-PER_SCENE_EMOTION = os.getenv("VOICE_PER_SCENE_EMOTION", "0").strip().lower() in ("1", "true", "yes", "on")
 
 EDGE_VOICE = os.getenv("EDGE_VOICE", os.getenv("VOICE", "th-TH-NiwatNeural"))
 RATE = os.getenv("VOICE_RATE", "+0%")
@@ -166,37 +161,56 @@ class ModelUnavailable(Exception):
 
 
 TTS_BASE_STYLE_EN = (
-    "A friendly, warm and credible male narrator for short-form factual documentaries. "
-    "Use natural, conversational Thai with clear articulation and expressive but balanced delivery. "
-    "Speak at a moderately brisk pace, aiming roughly 8-10 percent faster than an unhurried documentary read, "
-    "while keeping every word clear and preserving natural pauses. "
-    "Sound engaging and human, never robotic, flat, rushed, theatrical or exaggerated."
+    "You are the same warm, deep, credible male documentary storyteller throughout the entire video. "
+    "Keep a stable vocal identity, timbre, accent, microphone distance and baseline speaking pace. "
+    "Speak natural Thai with clear articulation and human conversational phrasing. "
+    "Prioritize truthfulness, restraint and listener comprehension over theatrical performance. "
+    "Do not sound like an actor performing a role; do not exaggerate, shout, whisper dramatically, "
+    "or force emotion where the words do not support it. Do not add, omit, paraphrase or reorder words. "
+    "Do not change speaking speed merely to create emotion. Use pauses, emphasis, vocal weight and "
+    "intonation only where they naturally clarify the meaning."
 )
 
-VOICE_DIRECTION_STYLES = {
-    "curious": "Scene emotion: curious and inviting. Add a light sense of wonder and anticipation, as if revealing an intriguing fact.",
-    "informative": "Scene emotion: clear and informative. Prioritize calm confidence, precise explanation and easy comprehension.",
-    "excited": "Scene emotion: pleasantly excited. Add lively energy and brighter emphasis, but do not shout or overact.",
-    "mysterious": "Scene emotion: subtly mysterious. Use restrained suspense and intrigue without becoming dark or frightening.",
-    "emphatic": "Scene emotion: emphatic. Give the key idea deliberate stress and a confident finish without sounding aggressive.",
-    "warm": "Scene emotion: warm and reassuring. Use gentle friendliness and a human, inviting tone."
-}
+
+def build_tts_style(
+    narration: str = "",
+    previous_narration: str = "",
+    next_narration: str = "",
+) -> str:
+    """ให้ TTS ตีความความหมายจริงและกำหนดวิธีเล่า โดยรักษาความต่อเนื่องข้ามฉาก"""
+    context = []
+    if previous_narration.strip():
+        context.append(f"Immediately preceding narration (context only, do not speak it): {previous_narration.strip()}")
+    if next_narration.strip():
+        context.append(f"Immediately following narration (context only, do not speak it): {next_narration.strip()}")
+    context_text = " ".join(context)
+    return (
+        f"{TTS_BASE_STYLE_EN} "
+        "Interpret the current Thai narration from its actual meaning, not from scene number or scene title. "
+        "Independently determine the most truthful and natural emotional color and delivery. "
+        "There is no fixed emotion list: the meaning may call for curiosity, restrained surprise, tension, "
+        "seriousness, sadness, calm explanation, conviction, a subtle mixture, or neutral delivery; "
+        "use none of these unless supported by the words. Do not announce or name an emotion. "
+        "Choose appropriate vocal weight (light, neutral or firm), natural pacing, meaningful pauses, "
+        "and selective emphasis on only the genuinely important words. Let one emotional direction continue "
+        "across connected thoughts; change it only when the meaning genuinely changes. "
+        "A surprising fact should sound quietly revealing rather than excited or shouted. "
+        "Serious or painful material deserves respectful restraint. Keep uncertainty explicit: "
+        "a possibility, estimate, allegation or hypothesis must never sound like a confirmed fact. "
+        "Maintain the same recognizable Orus voice and baseline pace while varying only subtle delivery. "
+        f"{context_text}"
+    )
 
 
-def build_tts_style(voice_direction: str = "informative") -> str:
-    """รวมบุคลิกเสียงหลักกับอารมณ์เฉพาะฉาก; รองรับ script.json รุ่นเก่าที่ไม่มี voice_direction"""
-    # v4.0: ค่าเริ่มต้นใช้สไตล์เดียวทั้งคลิป (informative) เพื่อให้น้ำเสียงเหมือนกันทุกฉาก
-    direction = str(voice_direction or "informative").strip().lower() if PER_SCENE_EMOTION else "informative"
-    if direction not in VOICE_DIRECTION_STYLES:
-        direction = "informative"
-    return f"{TTS_BASE_STYLE_EN} {VOICE_DIRECTION_STYLES[direction]}"
-
-
-def build_tts_payload(model: str, narration: str, voice_direction: str = "informative") -> dict:
-    """รุ่น 3.8 ขึ้นไป: text = บทพากย์เป๊ะๆ (โมเดลอ่านทุกคำ) ส่วนน้ำเสียงใส่ใน speech_metadata.style
-    หาก script.json เก่าไม่มี voice_direction จะใช้ informative โดยอัตโนมัติ"""
+def build_tts_payload(
+    model: str,
+    narration: str,
+    previous_narration: str = "",
+    next_narration: str = "",
+) -> dict:
+    """ส่ง narration ตรงตัว; ใช้ speech_metadata.style กำกับการตีความและความต่อเนื่อง"""
     text = narration.strip()
-    style = build_tts_style(voice_direction)
+    style = build_tts_style(text, previous_narration, next_narration)
     return {
         "contents": [
             {"role": "user", "parts": [{"text": text, "speech_metadata": {"style": style}}]}
@@ -208,13 +222,16 @@ def build_tts_payload(model: str, narration: str, voice_direction: str = "inform
     }
 
 
-def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str, voice_direction: str = "informative"):
+def call_gemini_tts_scene(
+    narration: str, out_mp3: pathlib.Path, model: str,
+    previous_narration: str = "", next_narration: str = "",
+):
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("ไม่มี GEMINI_API_KEY")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = build_tts_payload(model, narration, voice_direction)
+    payload = build_tts_payload(model, narration, previous_narration, next_narration)
 
     for attempt in range(1, 4):
         try:
@@ -258,22 +275,11 @@ def call_gemini_tts_scene(narration: str, out_mp3: pathlib.Path, model: str, voi
     raise RuntimeError(f"Gemini TTS ({model}) ล้มเหลวครบ 3 รอบสำหรับ {out_mp3.name}")
 
 
-def scene_direction(s: dict) -> str:
-    return str(s.get("voice_direction", "informative")).strip().lower() or "informative"
-
-
 def pick_test_scenes(scenes: list[dict]) -> list[dict]:
-    """เลือก 2 ฉากสำหรับทดสอบเสียง: ฉากแรก + ฉากที่อารมณ์ต่างจากฉากแรกและอยู่ใกล้กลางคลิปที่สุด (ถ้าไม่มี ใช้ฉากกลาง)"""
+    """เลือกฉากแรกและฉากกลางสำหรับทดสอบเสียง โดยใช้บุคลิกเสียงเดียวกัน"""
     if len(scenes) < 2:
         return list(scenes)
-    first = scenes[0]
-    mid = len(scenes) // 2
-    if not PER_SCENE_EMOTION:  # v4.0: เสียงไม่เปลี่ยนตามอารมณ์แล้ว เลือกฉากแรก + ฉากกลาง
-        return [first, scenes[mid]]
-    for i in sorted(range(1, len(scenes)), key=lambda k: abs(k - mid)):
-        if scene_direction(scenes[i]) != scene_direction(first):
-            return [first, scenes[i]]
-    return [first, scenes[mid]]
+    return [scenes[0], scenes[len(scenes) // 2]]
 
 
 def report_pace(narration: str, dur: float):
@@ -290,16 +296,14 @@ def generate_all_gemini(scenes: list[dict]) -> list[tuple[pathlib.Path, float]]:
     active_model = None  # รุ่นที่ล็อกแล้วหลังฉากแรกสำเร็จ
     for idx, s in enumerate(scenes):
         p = AUD / f"scene_{s['id']:02d}.mp3"
-        direction = scene_direction(s)
-        if direction not in VOICE_DIRECTION_STYLES:
-            print(f"  WARNING: voice_direction '{direction}' ไม่รู้จัก -> ใช้ informative")
-            direction = "informative"
-        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)} | emotion={direction if PER_SCENE_EMOTION else 'คงที่ทั้งคลิป'}...")
+        print(f"[Gemini TTS] ฉาก {s['id']}/{len(scenes)} | วิเคราะห์การถ่ายทอดจากเนื้อหา...")
+        previous_text = scenes[idx - 1].get("narration", "") if idx > 0 else ""
+        next_text = scenes[idx + 1].get("narration", "") if idx + 1 < len(scenes) else ""
         candidates = [active_model] if active_model else GEMINI_TTS_MODELS
         last_err = None
         for model in candidates:
             try:
-                call_gemini_tts_scene(s["narration"], p, model, direction)
+                call_gemini_tts_scene(s["narration"], p, model, previous_text, next_text)
                 active_model = model
                 last_err = None
                 break
@@ -362,7 +366,7 @@ def main():
     test = "--test" in sys.argv
     if test:
         scenes = pick_test_scenes(scenes)
-        print(f"[โหมดทดสอบเสียง] ฉากที่ใช้: {[s['id'] for s in scenes]} | emotion: {[scene_direction(s) for s in scenes]}")
+        print(f"[โหมดทดสอบเสียง] ฉากที่ใช้: {[s['id'] for s in scenes]} | Natural Emotional Narration")
 
     provider_used = "gemini"
     try:
@@ -377,7 +381,7 @@ def main():
 
     if test:
         for s, (p, dur) in zip(scenes, results):
-            print(f"  ทดสอบ: ฉาก {s['id']} ({scene_direction(s)}) -> {p} {dur} วิ")
+            print(f"  ทดสอบ: ฉาก {s['id']} -> {p} {dur} วิ")
         # v3.9: บันทึกฉากทดสอบ (id/เสียง/ความยาว) ให้ขั้น 3 เลือกฉากเดียวกัน และขั้น 4 เรนเดอร์ตัวอย่างพร้อมซับได้
         (OUT / "test_scenes.json").write_text(
             json.dumps([{"id": s["id"], "audio": str(p), "duration": dur} for s, (p, dur) in zip(scenes, results)],

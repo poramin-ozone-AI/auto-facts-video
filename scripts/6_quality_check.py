@@ -22,17 +22,6 @@ def main():
         if a.get("channels",0)>2: warnings.append("เสียงมีมากกว่า 2 channels")
     dur=float(d.get("format",{}).get("duration",0) or 0)
     if dur<=1: errors.append("ระยะเวลาวิดีโอผิดปกติ")
-    loud=run(["ffmpeg","-hide_banner","-i",str(VIDEO),"-af","loudnorm=I=-14:TP=-1.0:LRA=7:print_format=json","-f","null","-"])
-    txt=loud.stderr
-    if "input_i" in txt:
-        try:
-            block=txt[txt.rfind("{",0,txt.find("input_i"))+1:txt.find("}",txt.find("input_i"))]
-            vals={}
-            for line in block.splitlines():
-                if ":" in line:
-                    k,val=line.split(":",1); vals[k.strip().strip('"')]=val.strip().strip(' ,"')
-            warnings.append("ตรวจ loudness: " + ", ".join(f"{k}={vals[k]}" for k in ("input_i","input_tp","input_lra") if k in vals))
-        except Exception: warnings.append("อ่านค่าตรวจ loudness ไม่สำเร็จ")
     if errors:
         print("QC FAILED:",*errors,sep="\n- "); sys.exit(1)
     print(f"QC PASS: {VIDEO} | {dur:.2f}s | 1080x1920")

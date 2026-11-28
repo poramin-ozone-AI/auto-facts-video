@@ -5,6 +5,7 @@ python scripts/4_render_video.py --test   เรนเดอร์ตัวอ�
 """
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -30,6 +31,42 @@ def probe_media(path: pathlib.Path) -> dict:
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(f"ffprobe อ่านไฟล์ไม่ได้: {path} ({r.stderr.strip()})")
     return json.loads(r.stdout)
+
+def normalize_audio_two_pass(concat_list: pathlib.Path, output_path: pathlib.Path):
+    """วัด Integrated Loudness ก่อน แล้วปรับเสียงแบบ 2-pass ไปที่ -14 LUFS / -1 dBTP"""
+    target_i = -14.0
+    target_tp = -1.0
+    target_lra = 7.0
+    measure = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-f", "concat", "-safe", "0",
+            "-i", str(concat_list), "-vn", "-af",
+            f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json",
+            "-f", "null", "-",
+        ], capture_output=True, text=True,
+    )
+    if measure.returncode != 0:
+        raise RuntimeError(f"วัดระดับเสียงก่อน Normalize ไม่สำเร็จ: {measure.stderr[-1200:]}")
+    match = re.search(r"\{\s*\"input_i\".*?\}", measure.stderr, re.S)
+    if not match:
+        raise RuntimeError("FFmpeg ไม่ส่งค่าที่จำเป็นสำหรับ Loudness Normalization แบบ 2-pass")
+    stats = json.loads(match.group(0))
+    required = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    if any(k not in stats or stats[k] in ("-inf", "inf", "nan") for k in required):
+        raise RuntimeError(f"ค่าที่วัดได้ไม่สมบูรณ์สำหรับ Normalize: {stats}")
+    filt = (
+        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:"
+        f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:"
+        f"measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:"
+        f"offset={stats['target_offset']}:linear=true:print_format=summary"
+    )
+    print(f"ปรับความดังเสียงแบบ 2-pass: เป้าหมาย {target_i:.0f} LUFS / {target_tp:.0f} dBTP")
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+        "-i", str(concat_list), "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+        "-af", filt, "-movflags", "+faststart", str(output_path),
+    ], check=True)
+
 
 def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: pathlib.Path = None):
     img_path = pathlib.Path(scene["image"])
@@ -111,13 +148,7 @@ def main():
     concat_list = TMP / "concat.txt"
     concat_list.write_text("\n".join(f"file '{p.resolve()}'" for p in clip_paths) + "\n", encoding="utf-8")
     print(f"รวมทุกฉากเป็น {final_mp4}...")
-    subprocess.run([
-        "ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-        "-i", str(concat_list), "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "160k", "-af",
-        "loudnorm=I=-14:TP=-1.0:LRA=7:print_format=summary", "-movflags", "+faststart",
-        str(final_mp4),
-    ], check=True)
+    normalize_audio_two_pass(concat_list, final_mp4)
     if not final_mp4.exists() or final_mp4.stat().st_size < 50_000:
         sys.exit(f"ไฟล์ {final_mp4} เล็กผิดปกติหรือสร้างไม่สำเร็จ")
     info = probe_media(final_mp4)
