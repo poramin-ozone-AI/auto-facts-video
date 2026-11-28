@@ -42,8 +42,6 @@ jobs:
       SCRIPT_MIN_CHARS: "520"   # ความยาวบทพากย์รวมขั้นต่ำ/สูงสุด (ตัวอักษร) ถ้าคลิปสั้นเกินให้ขยับ MIN ขึ้น
       SCRIPT_MAX_CHARS: "900"
       SCRIPT_TEMPERATURE: "0.65"
-      VOICE_DIRECTIONS_ENABLED: "curious,informative,excited,mysterious,emphatic,warm"   # ตัดอารมณ์ที่ฟังแล้วไม่ต่างออกได้
-      VOICE_PER_SCENE_EMOTION: "0"   # v4.0: 0 = เสียงเดียวกันทุกฉาก, 1 = เปลี่ยนอารมณ์ตามฉากแบบ v3.7
       AUDIO_TAIL_PAD: "0.2"
       WHISPER_MODEL: "tiny"   # faster-whisper CPU int8
       CF_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-4b"
