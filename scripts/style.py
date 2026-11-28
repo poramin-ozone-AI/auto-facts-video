@@ -6,6 +6,10 @@ import re
 Cream watercolor paper is a surface texture, not a requirement for every scene background.
 The scene itself controls setting, palette, lighting, and environment.
 
+v4.2: น่ารัก (kawaii chibi) เฉพาะ "สิ่งมีชีวิต" เท่านั้น; วัตถุ สถานที่ ปรากฏการณ์ เซลล์ อวัยวะ และองค์ประกอบรอบข้างทั้งหมดสมจริง
+ตรงข้อเท็จจริง ไม่มีหน้าตา; build_prompt ตัดคำชวนให้น่ารัก (kawaii/chibi/cute/whimsical ฯลฯ) ออกจากคำบรรยายฉาก
+เพราะความน่ารักถูกควบคุมจาก STYLE ส่วนสิ่งมีชีวิตเท่านั้น
+
 v4.0: สไตล์ kawaii chibi ตามภาพตัวอย่าง + สั่งภาพเต็มขอบ (full-bleed, no border/frame/margin) เฉพาะใน prompt
 (ไม่มีขั้น crop) ตัดคำว่า "cream paper may show / paper margin" ที่เคยชวนให้โมเดลวาดขอบกระดาษออก
 
@@ -14,27 +18,38 @@ the style asks for, and how detailed the script writer's image_prompt must be (s
 """
 
 _STYLE_BASE = (
-    "Kawaii chibi storybook watercolor illustration, full-bleed edge-to-edge painted canvas. "
-    "Cute rounded characters with large glossy black eyes, tiny highlights, rosy cheeks, simple mouths, "
-    "chubby proportions and short limbs. Delicate dark-brown ink outlines, translucent warm pastel washes, "
-    "and fine watercolor paper grain across the entire scene. "
+    "Storybook watercolor illustration, full-bleed edge-to-edge canvas, delicate dark-brown ink outlines, "
+    "translucent washes, fine paper grain. "
+)
+# v4.2: ความน่ารักใช้กับ "สิ่งมีชีวิต" เท่านั้น (คน สัตว์ แมลง สิ่งมีชีวิตขนาดเล็ก)
+_STYLE_LIVING = (
+    "Only living beings (people, animals, insects, tiny organisms) are kawaii chibi: rounded, big glossy black eyes, "
+    "rosy cheeks, chubby, short limbs. "
+)
+# v4.2: สิ่งไม่มีชีวิตและองค์ประกอบรอบข้างสมจริง ตรงข้อเท็จจริง ไม่มีหน้าตา (เขียนเชิงบวก + สั้น เพราะ prompt ภาพมีเพดานตัวอักษร)
+_STYLE_NONLIVING = (
+    "Everything else (objects, places, landscapes, phenomena, cells, organs, molecules, planets, machines, surroundings) "
+    "is realistic, clear and accurate to science and history, drawn as ordinary faceless things as in real life. "
 )
 _STYLE_TAIL = (
-    "Clean, unmarked surfaces with pictorial storytelling; keep walls, fabrics and props visually blank. "
-    "Hand-painted 2D storybook illustration with soft atmospheric light and a cohesive pastel palette. "
+    "Clean blank surfaces, soft light, pastel tones for characters and natural colors elsewhere. "
 )
 
 STYLES = {
     # rich: ภาพมีชั้นหน้า-กลาง-หลัง ตัวละครมีท่าทาง ของประกอบ และบรรยากาศแสง แต่ยังมีจุดโฟกัสเดียว
     "rich": (
         _STYLE_BASE
-        + "Layered foreground, middle ground and background; expressive poses and a few meaningful props support one clear focal point. "
+        + _STYLE_LIVING
+        + _STYLE_NONLIVING
+        + "Layered depth, expressive poses for living characters, one clear focal point. "
         + _STYLE_TAIL
     ),
-    # standard: รายละเอียดปานกลาง แต่ยังเป็นสไตล์น่ารักและเต็มขอบเหมือนกัน
+    # standard: รายละเอียดปานกลาง กติกา "น่ารักเฉพาะสิ่งมีชีวิต" และเต็มขอบเหมือนกัน
     "standard": (
         _STYLE_BASE
-        + "A clear focal point, balanced supporting details, and a softly painted setting that fills the canvas. "
+        + _STYLE_LIVING
+        + _STYLE_NONLIVING
+        + "One clear focal point and a softly painted setting that fills the canvas. "
         + _STYLE_TAIL
     ),
 }
@@ -85,11 +100,28 @@ def strip_identity(image_prompt: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# v4.2: คำที่ทำให้โมเดลภาพเติมความน่ารัก/หน้าตาให้ของทุกอย่าง -> ตัดออกจากคำบรรยายฉากและ IDENTITY LOCK
+# (ความน่ารักของสิ่งมีชีวิตมาจาก STYLE ส่วน _STYLE_LIVING อยู่แล้ว)
+MAX_PROMPT_CHARS = int(os.getenv("IMAGE_PROMPT_MAX_CHARS", "2000"))
+CUTE_WORDS_RE = re.compile(
+    r"\b(?:kawaii|chibi|cute|cutest|adorable|whimsical(?:ly)?|charming(?:ly)?|delightful(?:ly)?|playful(?:ly)?|friendly|anthropomorphic|personified)\b[,]?\s*",
+    re.I,
+)
+
+
+def strip_cute_words(text: str) -> str:
+    cleaned = CUTE_WORDS_RE.sub("", str(text))
+    cleaned = re.sub(r"\bin\s+(?:a\s+)?(?:pastel\s+)?(?:style\s+)?watercolor\.?$", "", cleaned.strip(), flags=re.I)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def build_prompt(scene: dict) -> str:
     raw_desc = str(scene.get("image_prompt", "")).strip()
-    identities = extract_identities(raw_desc)
+    identities = [strip_cute_words(i) for i in extract_identities(raw_desc)]
+    identities = [i for i in identities if i]
     scene_desc = strip_identity(raw_desc).rstrip(".") if identities else re.sub(r"\s+", " ", raw_desc).rstrip(".")
     # ภาพตัดขวาง/ภาพขยายใกล้กำหนดมุมกล้องเองอยู่แล้ว -> ไม่ใส่ shot ซ้ำให้ชนกัน
+    scene_desc = strip_cute_words(scene_desc)
     if re.match(r"(cross-section|close-up macro)", scene_desc, re.I):
         shot = ""
     else:
@@ -108,4 +140,10 @@ def build_prompt(scene: dict) -> str:
     # ลำดับ: ฉาก -> identity -> มุมกล้อง -> สไตล์ (FLUX ให้น้ำหนักข้อความช่วงต้น)
     # The explicit scene prompt wins; shot wording is intentionally non-binding.
     parts = [STYLE, f"Scene: {scene_desc}.", identity_instruction, shot]
-    return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
+    prompt = re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
+    # v4.2: เพดานความยาว prompt ภาพ (FLUX บน Cloudflare รับได้ราว 2048 ตัวอักษร) -> ตัดมุมกล้อง (ไม่บังคับ) ก่อน
+    if len(prompt) > MAX_PROMPT_CHARS and shot:
+        prompt = re.sub(r"\s+", " ", " ".join(p for p in parts[:3] if p)).strip()
+    if len(prompt) > MAX_PROMPT_CHARS:
+        print(f"WARNING: image prompt ฉาก {scene.get('id')} ยาว {len(prompt)} ตัวอักษร เกิน {MAX_PROMPT_CHARS} ผู้ให้บริการภาพอาจตัดท้ายข้อความ")
+    return prompt
