@@ -49,10 +49,14 @@ jobs:
       IMAGE_RATE_LIMIT_RETRIES: "4"     # จำนวนครั้งที่รอแล้วลองใหม่เมื่อเจอ 429
       IMAGE_RATE_LIMIT_WAIT: "60"       # วินาทีรอ 429 ครั้งแรก (ครั้งถัดไปรอ 2x, 3x, ... สูงสุด 300)
       IMAGE_DETAIL_LEVEL: "rich"   # v3.8: rich = ภาพละเอียด มีคน/ฉากหน้า-หลัง/ของประกอบ, standard = ปานกลาง (ใช้ถ้าภาพแน่นเกินหรือโมเดลทำตาม prompt ไม่ครบ)
+      CHARACTERS_ENABLED: "1"           # v4.7: ตัวละครประจำคลิป OZONE + ORBI (ภาพอ้างอิงใน assets/characters/) ตั้ง "0" เพื่อปิดทั้งระบบ
+      CHAR_REF_MAX_SIDE: "480"          # v4.7: ด้านยาวสุดของภาพอ้างอิง (พิกเซล) เอกสาร Cloudflare จำกัดภาพอ้างอิง < 512x512
+      CHAR_REF_BG: "white"              # v4.7: พื้นหลังที่แปะใต้ภาพอ้างอิงโปร่งใส (white | cream | black) ยังไม่ยืนยันว่า Cloudflare ตีความช่องโปร่งใสอย่างไร จึงแปะพื้นให้เอง
+      HOOK_MAX_CHARS: "60"              # v4.8: ความยาวสูงสุดของคำถามฮุกฉากที่ 1 (ตัวอักษร) ราว 4-5 วินาที
       SUBTITLES_ENABLED: "1"            # v3.9: ซับเบิร์นลงวิดีโอ + output/subtitles.srt (0 = ปิด)
       SUBTITLE_KEYWORDS_ENABLED: "1"    # คำสำคัญสีเหลือง (0 = ซับขาวล้วน และไม่ขอ keywords จาก AI)
       SUBTITLE_FONT: "Loma"             # ฟอนต์ไทย (ติดตั้งจาก fonts-thai-tlwg ในขั้นติดตั้ง)
-      SUBTITLE_FONT_SIZE: "78"
+      SUBTITLE_FONT_SIZE: "96"
       SUBTITLE_MAX_CHARS: "22"          # ตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว)
       SUBTITLE_MARGIN_BOTTOM: "345"     # ระยะจากขอบล่าง (~18% ของ 1920) เลี่ยงปุ่ม Shorts/TikTok
       SUBTITLE_HIGHLIGHT_COLOR: "#FFD93B"
