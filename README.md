@@ -161,3 +161,11 @@ python scripts/compare_flux_models.py --prompt "A watercolor illustration of ...
 
 ### v4.1 offline revision
 Output is 1080×1920 (upscaled from 720×1280 generated images; image API request size and quota remain unchanged), with the existing linear 5% zoom preserved. faster-whisper tiny supplies word timestamps when available (otherwise segment timestamps) with a proportional fallback. Final audio is loudness-normalized to a trial target of -14 LUFS / -1 dBTP. Run `python scripts/6_quality_check.py output/output.mp4` after rendering. Review images and audio manually before publishing. This is an offline workspace revision; no live APIs, Actions, commits, or pushes were run.
+
+
+---
+
+## 9. v4.2 (น่ารักเฉพาะสิ่งมีชีวิต)
+
+- **ภาพ:** kawaii chibi เฉพาะคน สัตว์ แมลง สิ่งมีชีวิตขนาดเล็ก ส่วนวัตถุ สถานที่ ปรากฏการณ์ เซลล์ อวัยวะ และองค์ประกอบรอบข้างสมจริง ไม่มีหน้าตา
+- **บท:** AI ผู้เขียนบทได้รับกฎใหม่ และ IDENTITY LOCK ของสิ่งไม่มีชีวิตที่มีตา/แก้ม/ปาก/แขนขาจะถูกปฏิเสธแล้ว retry

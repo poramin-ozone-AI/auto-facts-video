@@ -427,3 +427,12 @@ C4) ถ้าเสียงยังต่าง ให้ส่ง log ขั�
 - Final audio uses FFmpeg loudnorm target -14 LUFS / -1 dBTP (trial target; audition required). Video concat uses stream-copy for the video stream and re-encodes audio for loudness normalization.
 - Added image and final MP4 QC scripts.
 - No live API calls, workflow runs, commits, or pushes were performed for this revision.
+
+
+---
+
+## 15. v4.2 (น่ารักเฉพาะสิ่งมีชีวิต)
+
+- สไตล์ kawaii chibi ใช้กับ "สิ่งมีชีวิต" (คน สัตว์ แมลง สิ่งมีชีวิตขนาดเล็ก) เท่านั้น ส่วนสิ่งของ วัตถุ สถานที่ ปรากฏการณ์ เซลล์ อวัยวะ และองค์ประกอบรอบข้างต้องสมจริง ชัดเจน อ่านง่าย ตรงข้อเท็จจริงทางวิทยาศาสตร์/ประวัติศาสตร์ ห้ามเติมหน้าตาหรือความน่ารักให้สิ่งไม่มีชีวิต
+- แก้ที่ `scripts/style.py` (STYLE แยก living/non-living + ตัดคำ kawaii/chibi/cute ออกจากคำบรรยายฉาก) และ `scripts/1_generate_script.py` (กฎสไตล์ภาพใน PROMPT, กฎรายละเอียดเสริมต้องเป็นของจริง, ตรวจ IDENTITY LOCK ของสิ่งไม่มีชีวิต)
+- รายละเอียดดู `รายละเอียดงานv4_2.txt` ยังไม่ได้ทดสอบกับการรันเต็มจริง
