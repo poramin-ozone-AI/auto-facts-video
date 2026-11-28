@@ -1,7 +1,8 @@
 """ซับไตเติลไทย (v3.9): ซอย narration เป็นท่อนสั้นบรรทัดเดียว + ไฮไลต์คำสำคัญสีเหลือง -> .ass (เบิร์นลงวิดีโอ) และ .srt (แยก)
 
 หลักการ
-  - ไม่มี timestamp ระดับคำจาก TTS จึงแบ่งเวลาของแต่ละฉากตามสัดส่วนจำนวนตัวอักษรของแต่ละท่อน
+  - TTS ไม่ให้ timestamp ระดับคำ: ถ้ามี faster-whisper จะใช้เวลา word/segment จากไฟล์เสียงมากำหนดจังหวะท่อนซับ (ข้อความยังเป็น narration ต้นฉบับ)
+    ถ้าใช้ Whisper ไม่ได้ จึงแบ่งเวลาของแต่ละฉากตามสัดส่วนจำนวนตัวอักษรของแต่ละท่อน
     (ความคลาดเคลื่อนไม่สะสมข้ามฉาก เพราะเวลาเริ่ม/ยาวของฉากมาจากไฟล์เสียงจริง)
   - ตัดคำไทยด้วย pythainlp (newmm) ถ้าไม่มี/ใช้ไม่ได้ จะตัดที่ช่องว่าง/เครื่องหมายวรรคตอนเท่านั้น และบังคับตัดตามความยาวแบบไม่รู้ขอบคำ (พิมพ์ WARNING)
   - คำสำคัญ (scene["keywords"]) ถูกถือเป็นก้อนเดียว ไม่ถูกตัดขาดกลางคำ
@@ -10,10 +11,10 @@
   SUBTITLES_ENABLED (1)          เปิด/ปิดซับทั้งหมด
   SUBTITLE_KEYWORDS_ENABLED (1)  เปิด/ปิดสีเหลืองคำสำคัญ (ปิด = ไม่ขอ keywords จาก AI ด้วย)
   SUBTITLE_FONT (Loma)           ชื่อฟอนต์ไทยที่ติดตั้งในเครื่อง (workflow ติดตั้ง fonts-thai-tlwg)
-  SUBTITLE_FONT_SIZE (54)        ขนาดตัวอักษร (หน่วยพิกเซลบนวิดีโอ 720x1280)
+  SUBTITLE_FONT_SIZE (78)        ขนาดตัวอักษร (หน่วยพิกเซลบนวิดีโอ 1080x1920)
   SUBTITLE_MAX_CHARS (22)        จำนวนตัวอักษรสูงสุดต่อท่อน (บรรทัดเดียว)
-  SUBTITLE_MARGIN_BOTTOM (230)   ระยะจากขอบล่าง (พิกเซล; 230 ~ 18% ของความสูง เลี่ยงปุ่ม Shorts/TikTok)
-  SUBTITLE_MARGIN_SIDE (60)      ระยะขอบซ้าย/ขวา
+  SUBTITLE_MARGIN_BOTTOM (345)   ระยะจากขอบล่าง (พิกเซล; 345 ~ 18% ของความสูง 1920 เลี่ยงปุ่ม Shorts/TikTok)
+  SUBTITLE_MARGIN_SIDE (90)      ระยะขอบซ้าย/ขวา
   SUBTITLE_OUTLINE (5)           ความหนาขอบดำ
   SUBTITLE_HIGHLIGHT_COLOR (#FFD93B)  สีคำสำคัญ (hex RRGGBB)
 """
@@ -228,12 +229,9 @@ def scene_cues(scene: dict, duration: float = None) -> list[tuple[float, float, 
         spans = [(a,b,t) for a,b,t in (word_spans or segment_spans) if t and b>a]
         if not spans:
             return fallback
-        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k,str)] if KEYWORDS_ENABLED else [])
-        if not chunks:
-            return []
         # Map cumulative character positions in the original narration onto Whisper segment intervals.
         # This preserves the exact original Thai wording while using ASR-derived timing boundaries.
-        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k,str)] if KEYWORDS_ENABLED else [])
+        chunks = make_chunks(scene.get("narration", ""), [k for k in (scene.get("keywords") or []) if isinstance(k, str)] if KEYWORDS_ENABLED else [])
         if not chunks:
             return []
         weights = [max(1, len(re.sub(r"\s", "", t))) for _,_,t in spans]

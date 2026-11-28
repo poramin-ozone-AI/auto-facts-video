@@ -1,4 +1,4 @@
-"""Render still illustrations (static, no zoom) + burned-in Thai subtitles (v4.3).
+"""Render still illustrations (static, no zoom) + burned-in Thai subtitles (v4.4).
 
 python scripts/4_render_video.py          เรนเดอร์เต็ม -> output/output.mp4 (+ output/subtitles.srt)
 python scripts/4_render_video.py --test   เรนเดอร์ตัวอย่างเฉพาะฉากทดสอบ (จาก output/test_scenes.json) -> output/test_output.mp4
@@ -41,7 +41,7 @@ def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: 
 
     dur = float(scene["duration"])
     frames = max(1, int(round(dur * FPS)))
-    # v4.3: ภาพนิ่ง ไม่ซูม
+    # ภาพนิ่ง ไม่ซูม (v4.3 เป็นต้นไป)
     base_vf = f"scale={W}:{H}:flags=lanczos"
     print(f"  ภาพนิ่ง | {frames} เฟรม" + (" | + ซับ" if ass_path else ""))
 
@@ -57,7 +57,7 @@ def render_scene_clip(scene: dict, idx: int, clip_path: pathlib.Path, ass_path: 
 
     if ass_path:
         try:
-            # ซับเบิร์นหลังซูม (ซับไม่ขยับตามภาพ)
+            # เบิร์นซับลงบนภาพนิ่ง (ซับอยู่กับที่)
             run(f"{base_vf},ass=filename='{ass_path.as_posix()}',format=yuv420p")
             return
         except subprocess.CalledProcessError as e:

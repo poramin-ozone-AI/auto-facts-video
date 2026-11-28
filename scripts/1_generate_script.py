@@ -6,7 +6,7 @@ Secrets: GEMINI_API_KEY (จำเป็น), GROQ_API_KEY (แนะนำเ�
   - GEMINI_MODEL            (ค่าเริ่มต้น: gemini-3.8-flash)
   - GEMINI_FALLBACK_MODELS  (ค่าเริ่มต้น: gemini-3.6-flash,gemini-3.5-flash-lite  คั่นด้วยจุลภาค)
   - GROQ_MODEL              (ค่าเริ่มต้น: openai/gpt-oss-120b)
-  - SCRIPT_MIN_CHARS / SCRIPT_MAX_CHARS  (ค่าเริ่มต้น: 520 / 1250 ตัวอักษรของบทพากย์รวม)
+  - SCRIPT_MIN_CHARS / SCRIPT_MAX_CHARS  (ค่าเริ่มต้นในโค้ดและ workflow: 520 / 900 ตัวอักษรของบทพากย์รวม)
   - IMAGE_DETAIL_LEVEL      (ค่าเริ่มต้น: rich; ใช้ standard ถ้าภาพแน่นเกิน) กำหนดความละเอียดของ image_prompt และสไตล์ภาพ
   - SUBTITLES_ENABLED / SUBTITLE_KEYWORDS_ENABLED  (ค่าเริ่มต้น 1/1; ปิดอย่างใดอย่างหนึ่ง = ไม่ขอ keywords สำหรับซับสีเหลืองจาก AI)
   - GEMINI_MAX_OUTPUT_TOKENS / GROQ_MAX_TOKENS  (ค่าเริ่มต้น: 16384 / 6000) เพดานโทเคนคำตอบ กัน JSON ถูกตัด
@@ -25,7 +25,7 @@ import sys
 import time
 import requests
 
-from style import IMAGE_DETAIL_LEVEL, extract_identities, strip_identity
+from style import IMAGE_DETAIL_LEVEL, coerce_bool, extract_identities, has_face_words, strip_identity
 from subtitles import KEYWORDS_ENABLED
 
 OUT = pathlib.Path("output")
@@ -40,8 +40,8 @@ GEMINI_FALLBACKS = [
 ]
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-# เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที -> 40-90 วิ ~ 520-1250 ตัวอักษร (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
-# (v3.5 เป็น 450-1400 ซึ่งหลุดช่วง 40-90 วินาทีได้ทั้งสองด้าน)
+# เสียงไทยพูดประมาณ 13-16 ตัวอักษร/วินาที (ค่าจริงวัดในขั้น 2 แล้วค่อยปรับ)
+# ค่าเริ่มต้นในโค้ด 520-900 ตรงกับที่ workflow ตั้งไว้ ถ้าต้องการคลิปยาวขึ้นให้เพิ่ม SCRIPT_MAX_CHARS ใน workflow
 MIN_CHARS = int(os.getenv("SCRIPT_MIN_CHARS", "520"))
 MAX_CHARS = int(os.getenv("SCRIPT_MAX_CHARS", "900"))
 MIN_SCENES, MAX_SCENES = 6, 12
@@ -108,7 +108,7 @@ def image_rules() -> str:
     tail = (
         "\n- IDENTITY LOCK ใช้กับกลุ่มคนหรือกลุ่มสัตว์ได้ด้วย เช่น IDENTITY LOCK: [Viking rowers: bearded men in wool tunics, "
         "round wooden shields, braided hair] ถ้ากลุ่มนั้นปรากฏหลายฉาก ให้คัดลอกข้อความเดิมคำต่อคำเพื่อให้หน้าตาและชุดคงที่ทั้งคลิป\n"
-        "- IDENTITY LOCK ของสิ่งไม่มีชีวิต (เช่น อวัยวะ เซลล์ สิ่งของ) ให้บรรยายรูปทรง สี วัสดุตามจริงเท่านั้น ห้ามมีตา แก้ม ปาก แขนขา หรือบุคลิกแบบตัวการ์ตูน\n"
+        "- IDENTITY LOCK ของสิ่งไม่มีชีวิต (เช่น อวัยวะ เซลล์ สิ่งของ) ให้บรรยายรูปทรง สี วัสดุ และลวดลายเท่านั้น ไม่ต้องเอ่ยถึงหน้าตา แขนขา หรือบุคลิกตัวการ์ตูนเลย\n"
         "- ห้ามมีตัวหนังสือ ตัวเลข เครื่องหมายคำพูด บอลลูนคำพูด หรือข้อความใดๆ ในภาพ ป้าย ใบเรือ โล่ และผนังต้องเป็นพื้นผิวเปล่า"
     )
     return common_head + body + tail
@@ -188,20 +188,20 @@ PROMPT = """คุณเป็นนักเขียนบทคลิปส�
 - บทพากย์รวมกัน {min_c}-{max_c} ตัวอักษร แบ่งเป็น {min_s}-{max_s} ฉาก
 {kw_rule}- แต่ละฉากมี image_prompt เป็นภาษาอังกฤษ บรรยายภาพเดียวที่มีจุดโฟกัสหลักชัดเจน เป็นภาพแนวตั้ง (9:16) ตามกฎ image_prompt ด้านล่าง
 - ความหลากหลายของภาพ: เลือกสิ่งที่เหมาะกับ narration ของแต่ละฉากจริง ๆ ทั้งสัตว์ สิ่งของ บุคคล สถานที่ ธรรมชาติ ภูมิประเทศ และภาพตัดขวาง ไม่ใช้สัตว์หรือตัวละครเดิมเป็นภาพประกอบทุกฉากโดยไม่มีเหตุผล
-- สไตล์ภาพ (สำคัญมาก): ให้สไตล์ภาพน่ารักเฉพาะ "สิ่งมีชีวิต" (เช่น คน สัตว์ แมลง สิ่งมีชีวิตขนาดเล็ก) เท่านั้น ส่วนสิ่งของ วัตถุ สถานที่ ปรากฏการณ์ เซลล์ต่างๆ อวัยวะ โมเลกุล และองค์ประกอบรอบข้าง ให้คงรูปแบบที่สมจริง ชัดเจน อ่านง่าย และตรงตามข้อเท็จจริงทางวิทยาศาสตร์หรือประวัติศาสตร์ ห้ามเติมหน้าตาหรือความน่ารักให้กับสิ่งไม่มีชีวิตเด็ดขาด (ไม่ทำให้สมอง เซลล์ โมเลกุล ดวงจันทร์ สิ่งของ หรือปรากฏการณ์กลายเป็นตัวการ์ตูนที่มีตา แก้ม ปาก แขนขา) ใน image_prompt ให้บรรยายสิ่งไม่มีชีวิตด้วยรูปทรง สี วัสดุ และตำแหน่งตามจริง และไม่ใช้คำว่า kawaii, chibi, cute, adorable, whimsical, charming, friendly, character กับสิ่งไม่มีชีวิต (ระบบภาพใส่ความน่ารักให้สิ่งมีชีวิตเองอยู่แล้ว)
+- สไตล์ภาพ (สำคัญมาก): ทุกฉากใช้สไตล์เดียวกันคือสีน้ำนิทานโทนพาสเทล รูปทรงกลมมน เรียบง่าย แสงนุ่ม ระบบภาพใส่สไตล์นี้ให้เองแล้ว ให้ระบุ has_living ทุกฉาก: true ถ้าในภาพมีคน สัตว์ แมลง หรือสิ่งมีชีวิตขนาดเล็กอย่างน้อยหนึ่งตัว (ระบบจะวาดเป็นตัวละคร kawaii chibi) และ false ถ้าภาพไม่มีสิ่งมีชีวิตเลย (วัตถุ สถานที่ ปรากฏการณ์ ดวงดาว เซลล์ อวัยวะ โมเลกุล ภาพตัดขวาง) ความน่ารักของสิ่งไม่มีชีวิตต้องมาจากรูปทรงและสี เช่น \"soft rounded plush-like shape in pastel colors with tiny sparkles of light\" และห้ามเอ่ยถึง eyes, face, mouth, cheeks, smile, arms, legs หรือ kawaii, chibi, cute ใน image_prompt ของฉากที่ has_living เป็น false เลย แม้เป็นประโยคปฏิเสธ (โมเดลภาพไม่มี negative prompt การสั่งห้ามหน้าตากลับดึงหน้าตาเข้ามาในภาพ) ฉากที่มีทั้งสิ่งมีชีวิตและวัตถุ (has_living เป็น true) ให้เฉพาะตัวละครที่มีชีวิตมีหน้าตา ส่วนวัตถุรอบข้างให้บรรยายเป็นรูปทรงกลมมนเรียบๆ ไม่มีหน้าตา ข้อเท็จจริงทางวิทยาศาสตร์และประวัติศาสตร์ในภาพต้องยังถูกต้อง
 - ความคงที่ของเอกลักษณ์ (Visual Consistency): อ่านบททั้งหมดก่อนแบ่งภาพ หากมีตัวละคร/สัตว์/วัตถุ "ตัวเดิม" ปรากฏซ้ำในหลายฉาก ต้องเป็นชนิด/ตัวเดียวกันและคงเอกลักษณ์เดิม เช่น สายพันธุ์ รูปร่าง สัดส่วน สี ลวดลาย จุดเด่น และเครื่องหมายเฉพาะ ห้ามเปลี่ยนเป็นสัตว์คนละชนิดหรือเปลี่ยนสี/ลายโดยไม่มีเหตุผล
 - สำหรับทุกฉากที่มีตัวเดิม ให้ใส่ IDENTITY LOCK ไว้ใน image_prompt เป็น "บรรทัดแยกท้ายข้อความ" (ขึ้นบรรทัดใหม่ด้วยอักขระ \n ใน JSON) ในรูปแบบเป๊ะๆ: IDENTITY LOCK: [คำอธิบายภาษาอังกฤษ] โดยต้องครอบคำอธิบายด้วยวงเล็บเหลี่ยม [ ] เสมอ และห้ามใส่ [ ] ซ้อนข้างใน ห้ามใส่คำบรรยายฉากไว้ในวงเล็บเหลี่ยม คัดลอกคำอธิบายชุดเดิมแบบคำต่อคำทุกตัวอักษรในทุกฉากที่กล่าวถึงตัวนั้น ให้ขึ้นต้นด้วยชื่อสามัญที่ชัดเจนของชนิด/สายพันธุ์/ประเภท (เช่น "A European robin (Erithacus rubecula)" หรือ "A red-eared slider turtle") ตามด้วยสี ลวดลาย สัดส่วน และจุดเด่น ห้ามใช้คำกว้าง ๆ เช่น "a bird" หรือ "an animal" อย่างเดียว ตัวอย่าง image_prompt: "The robin sings on a mossy branch at dawn, wide shot.\nIDENTITY LOCK: [A European robin (Erithacus rubecula), orange-red face and breast, olive-brown back, white belly, small round body, thin dark legs]"
 - เปลี่ยนได้เฉพาะท่าทาง กิจกรรม สีหน้า มุมกล้อง และสภาพแวดล้อมตาม narration แต่ห้ามเปลี่ยนเอกลักษณ์หลัก หากฉากไม่ได้กล่าวถึงตัวเดิมก็ไม่ต้องใส่ตัวนั้น
 - หากมีสัตว์ชนิดใหม่หรือตัวละครใหม่ ให้สร้าง IDENTITY LOCK ใหม่ของตัวนั้น ไม่เอาคำอธิบายของตัวก่อนหน้ามาใช้
-- แต่ละฉากต้องบรรยายภาพให้ครบในตัวเอง โดยไม่ใช้คำว่า "same as previous image"; คัดลอกข้อความ IDENTITY LOCK ฉบับเต็มแทน (ภาพเป็นการ์ตูนสีน้ำ โดยสไตล์น่ารักใช้เฉพาะสิ่งมีชีวิตตามกฎ "สไตล์ภาพ" ด้านล่าง)
-- image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรง ห้ามเป็นภาพบรรยากาศทั่วไปที่ไม่เกี่ยวกับประโยคนั้น
+- แต่ละฉากต้องบรรยายภาพให้ครบในตัวเอง โดยไม่ใช้คำว่า "same as previous image"; คัดลอกข้อความ IDENTITY LOCK ฉบับเต็มแทน (ภาพเป็นสีน้ำนิทานโทนพาสเทลตามกฎ "สไตล์ภาพ" ด้านบน)
+- image_prompt ของแต่ละฉากต้องวาดสิ่งที่ narration ของฉากนั้นพูดถึงโดยตรงและตรงตามรายละเอียดที่พูด ห้ามเป็นภาพบรรยากาศทั่วไป เช่น ถ้า narration พูดถึงลักษณะของดวงจันทร์ (หลุมบนพื้นผิว เฟสของดวงจันทร์ สี ตำแหน่งบนท้องฟ้า) ภาพต้องแสดงหลุม เฟส สี และตำแหน่งนั้นจริง ตัวเลข ขนาด จำนวน สี ตำแหน่ง และลำดับเหตุการณ์ที่ narration พูดต้องปรากฏในภาพตามนั้น
 - ถ้าสิ่งที่พูดถึงมองไม่เห็นจากภายนอก (เช่น ใต้ดิน ภายในร่างกาย จุลชีพ ใต้ทะเลลึก ภายในอะตอม) ให้ image_prompt เป็นภาพตัดขวางหรือภาพขยายใกล้ที่เห็นสิ่งนั้นชัดเจน ขึ้นต้นด้วยคำว่า cross-section cutaway view หรือ close-up macro view เช่น cross-section cutaway view of soil showing tree roots connected by thin glowing fungal threads
 - ถ้าฉากเป็นภาพตัดขวาง/ภาพขยายใกล้ ให้บรรทัดแรกของ image_prompt ขึ้นต้นด้วย cross-section cutaway view หรือ close-up macro view แล้วค่อยมีบรรทัด IDENTITY LOCK ตามหลัง (ถ้ามี)
 {image_rules}
 
 ตอบเป็น JSON อย่างเดียว ไม่มีข้อความอื่น ตามรูปแบบ:
 {{"topic": "หัวข้อสั้นๆ", "title": "ชื่อคลิป", "source_hint": ["ชื่อหน่วยงานหรือแหล่งข้อมูล"],
-  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}",{kw_field} "image_prompt": "..."}}]}}"""
+  "scenes": [{{"id": 1, "narration": "ข้อความพากย์", "voice_direction": "{voice_options}",{kw_field} "has_living": true, "image_prompt": "..."}}]}}"""
 
 
 class NonRetryable(Exception):
@@ -298,13 +298,49 @@ NONLIVING_HEAD_WORDS = {
     "heart", "lung", "lungs", "kidney", "liver", "stomach", "moon", "sun", "planet", "star", "cloud", "rock",
     "crystal", "mineral", "machine", "robot", "tool", "building", "house", "car", "ship", "boat", "cup", "mug",
     "clock", "book", "key", "gear", "droplet", "drop", "wave", "mountain", "volcano", "tower", "bridge",
+    "map", "bicycle", "bike", "train", "watch", "earth", "comet", "galaxy",
 }
-FACE_WORDS_RE = re.compile(r"\b(eyes?|cheeks?|mouth|smil\w*|arms?\b|legs?\b|face|kawaii|chibi|cute)\b", re.I)
+_NL_ALT = "|".join(sorted((re.escape(w) for w in NONLIVING_HEAD_WORDS), key=len, reverse=True))
+_FACE_ALT = r"(?:eyes?|eyelashes|cheeks?|mouths?|smil\w*|grin\w*|lips|arms?|legs?|faces?|facial)"
+# v4.4: ฉากที่มีสิ่งมีชีวิต (has_living=true) ตัวละครมีหน้าตาได้ แต่ถ้าประโยคเดียวกันผูกหน้าตาเข้ากับวัตถุ -> ปฏิเสธ
+# (heuristic: "<วัตถุ> with ... eyes", "<วัตถุ>'s face", "smiling <วัตถุ>")
+_OBJECT_FACE_RES = [
+    re.compile(rf"\b(?:{_NL_ALT})s?\b(?:\W+\w+){{0,4}}?\W+(?:with|has|have|having|showing)\W+(?:\w+\W+){{0,3}}?{_FACE_ALT}\b", re.I),
+    re.compile(rf"\b(?:{_NL_ALT})s?'s?\s+{_FACE_ALT}\b", re.I),
+    re.compile(rf"\b(?:smiling|grinning|winking|happy|cute)\s+(?:\w+\s+)?(?:{_NL_ALT})s?\b", re.I),
+]
 
 
 def nonliving_with_face(ident: str) -> bool:
     head_words = set(identity_head(ident).replace("-", " ").split())
-    return bool(head_words & NONLIVING_HEAD_WORDS) and bool(FACE_WORDS_RE.search(ident))
+    return bool(head_words & NONLIVING_HEAD_WORDS) and has_face_words(ident)
+
+
+def object_with_face(text: str) -> bool:
+    """ฉากมีสิ่งมีชีวิต: True ถ้าประโยคใดผูกหน้าตา/แขนขาเข้ากับวัตถุไม่มีชีวิต"""
+    for sentence in re.split(r"[.;!?\n]+", str(text)):
+        if any(rx.search(sentence) for rx in _OBJECT_FACE_RES):
+            return True
+    return False
+
+
+def check_scene_faces(i: int, s: dict, has_living: bool) -> list[str]:
+    """v4.4: ตรวจ image_prompt ทั้งฉาก (รวมบรรทัด IDENTITY LOCK) ไม่ให้วัตถุไม่มีชีวิตมีหน้าตา/แขนขา"""
+    img = str(s.get("image_prompt", ""))
+    if not has_living:
+        if has_face_words(img):
+            return [
+                f"ฉาก {i}: has_living เป็น false แต่ image_prompt มีคำเกี่ยวกับหน้าตา/แขนขา/kawaii (eyes, face, mouth, cheeks, smile, arms, legs ฯลฯ) "
+                "ให้เขียนใหม่โดยไม่เอ่ยถึงคำเหล่านี้เลย (แม้เป็นประโยคปฏิเสธ) บรรยายด้วยรูปทรงกลมมนนุ่ม สี พาสเทล และประกายแสงเล็กๆ แทน "
+                "หรือถ้าในภาพมีสิ่งมีชีวิตจริงให้ตั้ง has_living เป็น true"
+            ]
+        return []
+    if object_with_face(img):
+        return [
+            f"ฉาก {i}: image_prompt ทำให้วัตถุหรือสิ่งไม่มีชีวิตมีหน้าตา/แขนขา ให้เฉพาะตัวละครที่มีชีวิตมีหน้าตา "
+            "ส่วนวัตถุรอบข้างบรรยายเป็นรูปทรงกลมมนเรียบๆ ไม่เอ่ยถึงหน้าตา"
+        ]
+    return []
 
 
 def check_identities(scenes: list) -> list[str]:
@@ -367,6 +403,13 @@ def validate(d: dict, used_topics: list[str]) -> list[str]:
                 errs.append(f"ฉาก {i}: image_prompt สั้นเกินไป ({words} คำ) ต้องบรรยายอย่างน้อย {IMG_MIN_WORDS} คำ (เป้า {IMG_ASK_MIN}-{IMG_ASK_MAX}) ตามกฎ image_prompt")
             elif words > IMG_MAX_WORDS:
                 errs.append(f"ฉาก {i}: image_prompt ยาวเกินไป ({words} คำ) ต้องไม่เกิน {IMG_MAX_WORDS} คำ (เป้า {IMG_ASK_MIN}-{IMG_ASK_MAX})")
+        # v4.4: has_living ต่อฉาก (AI ระบุเอง) ถ้าไม่มี/อ่านไม่ได้ ใช้การมี IDENTITY LOCK เป็นตัวสำรอง ไม่ปฏิเสธทั้งบท
+        has_living = coerce_bool(s.get("has_living"))
+        if has_living is None:
+            has_living = bool(extract_identities(img))
+            print(f"WARNING: ฉาก {i}: has_living หายไปหรือไม่ถูกต้อง -> ใช้ผลจาก IDENTITY LOCK ({has_living})")
+        s["has_living"] = has_living
+        errs.extend(check_scene_faces(i, s, has_living))
         direction = str(s.get("voice_direction", "")).strip().lower()
         if direction not in VOICE_DIRECTIONS:
             # ไม่ปฏิเสธทั้งบท (กันเสียโควตา retry) -> เติม informative แล้วเตือนใน log

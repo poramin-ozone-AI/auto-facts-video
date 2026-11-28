@@ -1,10 +1,15 @@
 import os
 import re
 
-"""Style and scene prompt builder for varied watercolor illustrations.
+"""Style and scene prompt builder for storybook watercolor illustrations.
 
-Cream watercolor paper is a surface texture, not a requirement for every scene background.
-The scene itself controls setting, palette, lighting, and environment.
+v4.4: ใช้สไตล์ฐานชุดเดียวทุกฉาก (สีน้ำนิทาน โทนพาสเทล รูปทรงกลมมน เรียบง่าย แสงนุ่ม) ฉากทุกฉากจึงดูเป็นภาพชุดเดียวกัน
+  - สิ่งมีชีวิต = kawaii chibi (มีหน้าตา) ตามเดิม
+  - สิ่งไม่มีชีวิต = น่ารักจาก "รูปทรงและสี" (ทรงกลมมนนุ่มคล้ายตุ๊กตา พาสเทล ประกายแสงเล็กๆ) ไม่เอ่ยถึงตา/ปาก/แก้ม/แขนขาเลย
+    (FLUX.2 klein ไม่มี negative prompt การสั่งห้ามหน้าตากลับดึงหน้าตาเข้ามา)
+  - ประเภทฉากมาจากฟิลด์ has_living ที่ AI ระบุต่อฉาก; ถ้าไม่มี/ไม่ถูกต้องใช้ IDENTITY LOCK เป็นตัวสำรอง
+  - ฉากที่มีทั้งสองอย่าง: เฉพาะตัวละครมีหน้าตา วัตถุรอบข้างเป็นรูปทรงกลมมนเรียบๆ
+  - มุมกล้องแยก 2 ชุด (SHOTS_LIVING / SHOTS_NONLIVING) ชุดไม่มีชีวิตไม่มีคำว่า "characters"
 
 v4.3: แยกสไตล์ตามฉาก (style_for) ฉากไม่มีสิ่งมีชีวิตไม่มีคำว่า eyes/kawaii เลย แก้ปัญหาสมองมีลูกตา
 
@@ -20,17 +25,18 @@ the style asks for, and how detailed the script writer's image_prompt must be (s
 """
 
 _STYLE_BASE = (
-    "Storybook watercolor illustration, full-bleed edge-to-edge canvas, delicate dark-brown ink outlines, "
-    "translucent washes, fine paper grain. "
+    "Storybook watercolor illustration, soft pastel palette, rounded simple shapes, "
+    "full-bleed edge-to-edge canvas, delicate dark-brown ink outlines, translucent washes, fine paper grain. "
 )
-# v4.3: แยกสไตล์ตามฉาก - ฉากที่มี IDENTITY LOCK (สิ่งมีชีวิต) เท่านั้นที่ได้ kawaii/ตา
+# ฉากที่มีสิ่งมีชีวิต: ตัวละครเป็น kawaii chibi; วัตถุรอบข้างเป็นรูปทรงกลมมนเรียบๆ (ไม่พูดถึงหน้าตาของวัตถุ)
 _STYLE_LIVING = (
-    "Characters are kawaii chibi: rounded, big glossy black eyes, rosy cheeks, chubby, short limbs, pastel tones. "
-    "Surroundings are softly painted and realistic. "
+    "Living characters are kawaii chibi: big head, big glossy black eyes, rosy cheeks, chubby round body, short limbs, pastel tones. "
+    "Surrounding objects are smooth soft rounded forms in pastel colors. "
 )
-# v4.3: ฉากไม่มีสิ่งมีชีวิต: ไม่พูดถึงตา/หน้า/kawaii เลย (klein ไม่มี negative prompt และการสั่งห้ามกลับดึงหน้าตาเข้ามา)
+# ฉากไม่มีสิ่งมีชีวิต: ความน่ารักมาจากรูปทรงและสีเท่านั้น ห้ามมีคำเกี่ยวกับหน้าตา/แขนขา/kawaii ในข้อความนี้
 _STYLE_NONLIVING = (
-    "Anatomically accurate scientific watercolor illustration in natural colors, clear and realistic. "
+    "Everything is drawn as soft rounded plush-like shapes in gentle pastel colors with tiny sparkles of light, "
+    "clean and simple. "
 )
 _DEPTH = {
     "rich": "Layered depth, one clear focal point. ",
@@ -51,13 +57,15 @@ IMAGE_DETAIL_LEVEL = resolve_detail_level()
 
 
 def style_for(has_living: bool) -> str:
+    """สไตล์ฐานชุดเดียว + ส่วนเฉพาะประเภทฉาก (มีชีวิต / ไม่มีชีวิต)"""
     return _STYLE_BASE + (_STYLE_LIVING if has_living else _STYLE_NONLIVING) + _DEPTH[IMAGE_DETAIL_LEVEL] + _STYLE_TAIL
 
 
 STYLE = style_for(False)  # เก็บไว้เพื่อความเข้ากันได้กับโค้ดที่ import STYLE
 
 # Shot variety is a suggestion; scenes starting with cross-section/macro skip it (see build_prompt).
-SHOTS = [
+# v4.4: แยกเป็น 2 ชุด ชุดไม่มีสิ่งมีชีวิตไม่มีคำว่า "characters" และ "eye" (กันโมเดลวาดตัวละคร/ตาในฉากวัตถุ)
+SHOTS_LIVING = [
     "Use a medium shot that shows the characters' poses together with their surroundings.",
     "Use a wide establishing composition with clear foreground, middle ground and background.",
     "Use a low-angle viewpoint when appropriate.",
@@ -67,6 +75,17 @@ SHOTS = [
     "Use an over-the-shoulder or three-quarter viewpoint when appropriate.",
     "Use a balanced environmental composition with layered depth.",
 ]
+SHOTS_NONLIVING = [
+    "Use a medium shot that shows the main subject together with its surroundings.",
+    "Use a wide establishing composition with clear foreground, middle ground and background.",
+    "Use a low-angle viewpoint when appropriate.",
+    "Use a high top-down overhead viewpoint when appropriate.",  # ไม่ใช้คำว่า bird's-eye (มีคำว่า eye)
+    "Use a side/profile viewpoint when appropriate.",
+    "Use a detailed close-up when the subject benefits from it.",
+    "Use a three-quarter viewpoint when appropriate.",
+    "Use a balanced environmental composition with layered depth.",
+]
+SHOTS = SHOTS_LIVING  # เก็บไว้เพื่อความเข้ากันได้กับโค้ดที่ import SHOTS
 
 # IDENTITY LOCK: รูปแบบที่บังคับ = บรรทัดแยก  IDENTITY LOCK: [คำอธิบายภาษาอังกฤษ]
 IDENTITY_BRACKET_RE = re.compile(r"IDENTITY\s+LOCK\s*:\s*\[([^\]\n]+)\]", re.I)
@@ -90,6 +109,53 @@ def strip_identity(image_prompt: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# v4.4: คำเกี่ยวกับหน้าตา/แขนขา ที่ห้ามปรากฏในฉากไม่มีสิ่งมีชีวิต (ตรวจใน 1_generate_script.py)
+FACE_WORDS_RE = re.compile(
+    r"\b(?:eyes?|eyelashes|cheeks?|mouths?|smil\w*|grin\w*|lips|arms?|legs?|face|faces|facial|kawaii|chibi|cute|adorable)\b",
+    re.I,
+)
+# วลีที่เป็นคำศัพท์จริงของวัตถุ/ภูมิประเทศ/กายวิภาค ไม่ใช่หน้าตา -> ตัดออกก่อนตรวจ (heuristic)
+FACE_SAFE_RE = re.compile(
+    r"\b(?:"
+    r"spiral arms?|galactic arms?|arms? of (?:the |a )?(?:galaxy|sea|river|crane|lever)|"
+    r"(?:rock|cliff|north|south|east|west|mountain|clock|watch|coin)\s+faces?|faces? of (?:the |a )?(?:cliff|mountain|rock|clock|moon|coin|crystal|cube|dice)|"
+    r"(?:river|cave|tunnel|volcano)\s+mouths?|mouths? of (?:the |a )?(?:river|cave|tunnel|volcano)|"
+    r"eyes? of (?:the |a )?(?:storm|hurricane|needle|cyclone)|(?:table|chair|tripod|piano)\s+legs?|"
+    r"(?:human|anatomical|muscle|bone|skeletal|upper|lower)\s+(?:arms?|legs?|face|mouth|eyes?)|"
+    r"(?:arms?|legs?|face|mouth|eyes?)\s+(?:muscles?|bones?|nerves?|tissues?|sockets?|cavity|skin)"
+    r")\b",
+    re.I,
+)
+
+
+def has_face_words(text: str) -> bool:
+    """True ถ้าข้อความมีคำเกี่ยวกับหน้าตา/แขนขา/kawaii (หลังตัดวลีศัพท์จริงที่ปลอดภัยออก)"""
+    return bool(FACE_WORDS_RE.search(FACE_SAFE_RE.sub(" ", str(text))))
+
+
+def coerce_bool(value):
+    """แปลงค่าฟิลด์ has_living เป็น True/False; คืน None ถ้าไม่มี/อ่านไม่ได้ (ให้ผู้เรียกใช้ตัวสำรอง)"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "yes", "y", "1"):
+            return True
+        if v in ("false", "no", "n", "0"):
+            return False
+    return None
+
+
+def scene_has_living(scene: dict) -> bool:
+    """ประเภทฉาก: ใช้ has_living ที่ AI ระบุ ถ้าไม่มี/ไม่ถูกต้องใช้การมี IDENTITY LOCK เป็นตัวสำรอง"""
+    flag = coerce_bool(scene.get("has_living"))
+    if flag is not None:
+        return flag
+    return bool(extract_identities(scene.get("image_prompt", "")))
+
+
 # v4.2: คำที่ทำให้โมเดลภาพเติมความน่ารัก/หน้าตาให้ของทุกอย่าง -> ตัดออกจากคำบรรยายฉากและ IDENTITY LOCK
 # (ความน่ารักของสิ่งมีชีวิตมาจาก STYLE ส่วน _STYLE_LIVING อยู่แล้ว)
 MAX_PROMPT_CHARS = int(os.getenv("IMAGE_PROMPT_MAX_CHARS", "2000"))
@@ -107,6 +173,7 @@ def strip_cute_words(text: str) -> str:
 
 def build_prompt(scene: dict) -> str:
     raw_desc = str(scene.get("image_prompt", "")).strip()
+    has_living = scene_has_living(scene)
     identities = [strip_cute_words(i) for i in extract_identities(raw_desc)]
     identities = [i for i in identities if i]
     scene_desc = strip_identity(raw_desc).rstrip(".") if identities else re.sub(r"\s+", " ", raw_desc).rstrip(".")
@@ -115,23 +182,33 @@ def build_prompt(scene: dict) -> str:
     if re.match(r"(cross-section|close-up macro)", scene_desc, re.I):
         shot = ""
     else:
-        shot = SHOTS[max(0, int(scene.get("id", 1)) - 1) % len(SHOTS)]
+        shots = SHOTS_LIVING if has_living else SHOTS_NONLIVING
+        shot = shots[max(0, int(scene.get("id", 1)) - 1) % len(shots)]
     identity_instruction = ""
     if identities:
-        identity_instruction = (
-            "CHARACTER / SUBJECT IDENTITY MUST MATCH EXACTLY: "
-            + "; ".join(identities)
-            + ". Preserve the same species, anatomy, proportions, base colors, "
-              "markings, and distinctive features. Only pose, action, expression, "
-              "camera angle, and environment may change as the scene requires."
-        )
+        if has_living:
+            identity_instruction = (
+                "CHARACTER / SUBJECT IDENTITY MUST MATCH EXACTLY: "
+                + "; ".join(identities)
+                + ". Preserve the same species, anatomy, proportions, base colors, "
+                  "markings, and distinctive features. Only pose, action, expression, "
+                  "camera angle, and environment may change as the scene requires."
+            )
+        else:
+            # ฉากไม่มีสิ่งมีชีวิต: ไม่ใช้คำว่า anatomy/expression/character ที่ชวนให้เติมหน้าตา
+            identity_instruction = (
+                "SUBJECT MUST MATCH EXACTLY: "
+                + "; ".join(identities)
+                + ". Preserve the same shape, proportions, base colors, "
+                  "markings, and distinctive features. Only position, "
+                  "camera angle, and environment may change as the scene requires."
+            )
     # v3.6: ไม่ส่งบทพากย์ (narration) เข้าโมเดลภาพ เพราะ T1 พบว่าโมเดลเอาบทมาเขียนเป็นตัวหนังสือในภาพ
-    # (ฉาก 4: ข้อความอังกฤษที่แปลจากบทไทยโผล่ใต้ภาพ) image_prompt บรรยายฉากครบในตัวอยู่แล้ว
+    # image_prompt บรรยายฉากครบในตัวอยู่แล้ว
     # ลำดับ: ฉาก -> identity -> มุมกล้อง -> สไตล์ (FLUX ให้น้ำหนักข้อความช่วงต้น)
-    # The explicit scene prompt wins; shot wording is intentionally non-binding.
-    parts = [style_for(bool(identities)), f"Scene: {scene_desc}.", identity_instruction, shot]
+    parts = [style_for(has_living), f"Scene: {scene_desc}.", identity_instruction, shot]
     prompt = re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
-    # v4.2: เพดานความยาว prompt ภาพ (FLUX บน Cloudflare รับได้ราว 2048 ตัวอักษร) -> ตัดมุมกล้อง (ไม่บังคับ) ก่อน
+    # เพดานความยาว prompt ภาพ (FLUX บน Cloudflare รับได้ราว 2048 ตัวอักษร) -> ตัดมุมกล้อง (ไม่บังคับ) ก่อน
     if len(prompt) > MAX_PROMPT_CHARS and shot:
         prompt = re.sub(r"\s+", " ", " ".join(p for p in parts[:3] if p)).strip()
     if len(prompt) > MAX_PROMPT_CHARS:
